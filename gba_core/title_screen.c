@@ -1,0 +1,417 @@
+// ============================================================
+// Terraria GBA - Title Screen
+// Static logo + splash text + blinking Press START + music
+// ============================================================
+#include "game_data.h"
+#include "theme_data.h"
+
+// PSG Sound registers
+#define REG_SOUNDCNT_L  (*(volatile uint16_t*)0x04000080)
+#define REG_SOUNDCNT_H  (*(volatile uint16_t*)0x04000082)
+#define REG_SOUNDCNT_X  (*(volatile uint16_t*)0x04000084)
+// Channel 1 (Square + Sweep)
+#define REG_SOUND1CNT_L (*(volatile uint16_t*)0x04000060)
+#define REG_SOUND1CNT_H (*(volatile uint16_t*)0x04000062)
+#define REG_SOUND1CNT_X (*(volatile uint16_t*)0x04000064)
+// Channel 2 (Square)
+#define REG_SOUND2CNT_L (*(volatile uint16_t*)0x04000068)
+#define REG_SOUND2CNT_H (*(volatile uint16_t*)0x0400006C)
+
+#define TITLE_MODE_3     0x0003
+#define TITLE_BG2_ENABLE 0x0400
+#define TITLE_SCREEN_W   240
+#define TITLE_SCREEN_H   160
+#define TITLE_VRAM ((volatile uint16_t*)0x06000000)
+
+// Splash texts
+static const char* const my_splashes[] = {
+    "Also try Minecraft!",
+    "Now on Game Boy!",
+    "Cthulhu watches...",
+};
+#define NUM_MY_SPLASH 3
+
+// --- 8x8 bitmap font ---
+static const unsigned char font8[96][8] = {
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // ' '
+    {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00}, // '!'
+    {0x6C,0x6C,0x24,0x00,0x00,0x00,0x00,0x00}, // '"'
+    {0x6C,0xFE,0x6C,0x6C,0xFE,0x6C,0x00,0x00}, // '#'
+    {0x18,0x7E,0x58,0x7E,0x1A,0x7E,0x18,0x00}, // '$'
+    {0x62,0x64,0x08,0x10,0x26,0x46,0x00,0x00}, // '%'
+    {0x38,0x6C,0x38,0x76,0xDC,0x76,0x00,0x00}, // '&'
+    {0x18,0x18,0x10,0x00,0x00,0x00,0x00,0x00}, // '\''
+    {0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00}, // '('
+    {0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00}, // ')'
+    {0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00}, // '*'
+    {0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00}, // '+'
+    {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30}, // ','
+    {0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00}, // '-'
+    {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00}, // '.'
+    {0x02,0x06,0x0C,0x18,0x30,0x60,0x40,0x00}, // '/'
+    {0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00}, // '0'
+    {0x18,0x38,0x18,0x18,0x18,0x18,0x7E,0x00}, // '1'
+    {0x3C,0x66,0x06,0x0C,0x18,0x30,0x7E,0x00}, // '2'
+    {0x3C,0x66,0x06,0x1C,0x06,0x66,0x3C,0x00}, // '3'
+    {0x0C,0x1C,0x3C,0x6C,0x7E,0x0C,0x0C,0x00}, // '4'
+    {0x7E,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00}, // '5'
+    {0x1C,0x30,0x60,0x7C,0x66,0x66,0x3C,0x00}, // '6'
+    {0x7E,0x06,0x0C,0x18,0x30,0x30,0x30,0x00}, // '7'
+    {0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00}, // '8'
+    {0x3C,0x66,0x66,0x3E,0x06,0x0C,0x38,0x00}, // '9'
+    {0x00,0x00,0x18,0x00,0x00,0x18,0x00,0x00}, // ':'
+    {0x00,0x00,0x18,0x00,0x00,0x18,0x18,0x30}, // ';'
+    {0x06,0x0C,0x18,0x30,0x18,0x0C,0x06,0x00}, // '<'
+    {0x00,0x00,0x7E,0x00,0x7E,0x00,0x00,0x00}, // '='
+    {0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00}, // '>'
+    {0x3C,0x66,0x06,0x0C,0x18,0x00,0x18,0x00}, // '?'
+    {0x3C,0x66,0x6E,0x6A,0x6E,0x60,0x3E,0x00}, // '@'
+    {0x18,0x3C,0x66,0x7E,0x66,0x66,0x66,0x00}, // 'A'
+    {0x7C,0x66,0x66,0x7C,0x66,0x66,0x7C,0x00}, // 'B'
+    {0x3C,0x66,0x60,0x60,0x60,0x66,0x3C,0x00}, // 'C'
+    {0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00}, // 'D'
+    {0x7E,0x60,0x60,0x78,0x60,0x60,0x7E,0x00}, // 'E'
+    {0x7E,0x60,0x60,0x78,0x60,0x60,0x60,0x00}, // 'F'
+    {0x3E,0x60,0x60,0x6E,0x66,0x66,0x3E,0x00}, // 'G'
+    {0x66,0x66,0x66,0x7E,0x66,0x66,0x66,0x00}, // 'H'
+    {0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00}, // 'I'
+    {0x06,0x06,0x06,0x06,0x66,0x66,0x3C,0x00}, // 'J'
+    {0x66,0x6C,0x78,0x70,0x78,0x6C,0x66,0x00}, // 'K'
+    {0x60,0x60,0x60,0x60,0x60,0x60,0x7E,0x00}, // 'L'
+    {0xC6,0xEE,0xFE,0xD6,0xC6,0xC6,0xC6,0x00}, // 'M'
+    {0x66,0x76,0x7E,0x7E,0x6E,0x66,0x66,0x00}, // 'N'
+    {0x3C,0x66,0x66,0x66,0x66,0x66,0x3C,0x00}, // 'O'
+    {0x7C,0x66,0x66,0x7C,0x60,0x60,0x60,0x00}, // 'P'
+    {0x3C,0x66,0x66,0x66,0x6A,0x6C,0x36,0x00}, // 'Q'
+    {0x7C,0x66,0x66,0x7C,0x6C,0x66,0x66,0x00}, // 'R'
+    {0x3C,0x66,0x60,0x3C,0x06,0x66,0x3C,0x00}, // 'S'
+    {0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x00}, // 'T'
+    {0x66,0x66,0x66,0x66,0x66,0x66,0x3E,0x00}, // 'U'
+    {0x66,0x66,0x66,0x66,0x66,0x3C,0x18,0x00}, // 'V'
+    {0xC6,0xC6,0xC6,0xD6,0xFE,0xEE,0xC6,0x00}, // 'W'
+    {0x66,0x66,0x3C,0x18,0x3C,0x66,0x66,0x00}, // 'X'
+    {0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x00}, // 'Y'
+    {0x7E,0x06,0x0C,0x18,0x30,0x60,0x7E,0x00}, // 'Z'
+    {0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00}, // '['
+    {0x40,0x60,0x30,0x18,0x0C,0x06,0x02,0x00}, // '\\'
+    {0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00}, // ']'
+    {0x18,0x3C,0x66,0x00,0x00,0x00,0x00,0x00}, // '^'
+    {0x00,0x00,0x00,0x00,0x00,0x00,0xFE,0x00}, // '_'
+    {0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00}, // '`'
+    {0x00,0x00,0x3C,0x06,0x3E,0x66,0x3E,0x00}, // 'a'
+    {0x60,0x60,0x7C,0x66,0x66,0x66,0x7C,0x00}, // 'b'
+    {0x00,0x00,0x3C,0x66,0x60,0x66,0x3C,0x00}, // 'c'
+    {0x06,0x06,0x3E,0x66,0x66,0x66,0x3E,0x00}, // 'd'
+    {0x00,0x00,0x3C,0x66,0x7E,0x60,0x3C,0x00}, // 'e'
+    {0x1C,0x30,0x7C,0x30,0x30,0x30,0x30,0x00}, // 'f'
+    {0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x3C}, // 'g'
+    {0x60,0x60,0x7C,0x66,0x66,0x66,0x66,0x00}, // 'h'
+    {0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00}, // 'i'
+    {0x0C,0x00,0x1C,0x0C,0x0C,0x0C,0x6C,0x38}, // 'j'
+    {0x60,0x60,0x66,0x6C,0x78,0x6C,0x66,0x00}, // 'k'
+    {0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00}, // 'l'
+    {0x00,0x00,0xEC,0xFE,0xD6,0xC6,0xC6,0x00}, // 'm'
+    {0x00,0x00,0x7C,0x66,0x66,0x66,0x66,0x00}, // 'n'
+    {0x00,0x00,0x3C,0x66,0x66,0x66,0x3C,0x00}, // 'o'
+    {0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x60}, // 'p'
+    {0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x06}, // 'q'
+    {0x00,0x00,0x7C,0x66,0x60,0x60,0x60,0x00}, // 'r'
+    {0x00,0x00,0x3E,0x60,0x3C,0x06,0x7C,0x00}, // 's'
+    {0x30,0x30,0x7C,0x30,0x30,0x30,0x1C,0x00}, // 't'
+    {0x00,0x00,0x66,0x66,0x66,0x66,0x3E,0x00}, // 'u'
+    {0x00,0x00,0x66,0x66,0x66,0x3C,0x18,0x00}, // 'v'
+    {0x00,0x00,0xC6,0xC6,0xD6,0xFE,0x6C,0x00}, // 'w'
+    {0x00,0x00,0x66,0x3C,0x18,0x3C,0x66,0x00}, // 'x'
+    {0x00,0x00,0x66,0x66,0x66,0x3E,0x06,0x3C}, // 'y'
+    {0x00,0x00,0x7E,0x0C,0x18,0x30,0x7E,0x00}, // 'z'
+    {0x0C,0x18,0x18,0x70,0x18,0x18,0x0C,0x00}, // '{'
+    {0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00}, // '|'
+    {0x30,0x18,0x18,0x0E,0x18,0x18,0x30,0x00}, // '}'
+    {0x00,0x00,0x76,0xDC,0x00,0x00,0x00,0x00}, // '~'
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // DEL
+};
+
+// cos(20deg) * 256 ??? 240, sin(20deg) * 256 ??? 87
+#define COS20 240
+#define SIN20 87
+
+static inline void title_vsync(void) {
+    while (REG_VCOUNT >= 160);
+    while (REG_VCOUNT < 160);
+}
+
+static inline void title_plot(int x, int y, unsigned short color) {
+    if ((unsigned)x < TITLE_SCREEN_W && (unsigned)y < TITLE_SCREEN_H)
+        TITLE_VRAM[y * TITLE_SCREEN_W + x] = color;
+}
+
+// Blit sprite with alpha
+static void title_blit_sprite(const unsigned short* pixels, const unsigned char* alpha,
+                        int w, int h, int dx, int dy) {
+    int sx, sy;
+    for (sy = 0; sy < h; sy++) {
+        int screen_y = dy + sy;
+        if ((unsigned)screen_y >= TITLE_SCREEN_H) continue;
+        for (sx = 0; sx < w; sx++) {
+            int screen_x = dx + sx;
+            if ((unsigned)screen_x >= TITLE_SCREEN_W) continue;
+            int idx = sy * w + sx;
+            if (alpha[idx])
+                TITLE_VRAM[screen_y * TITLE_SCREEN_W + screen_x] = pixels[idx];
+        }
+    }
+}
+
+// Draw single char at pixel position
+static void title_draw_char(int ch, int px, int py, unsigned short color) {
+    int ci = ch - 32;
+    int row, col;
+    if (ci < 0 || ci >= 96) return;
+    for (row = 0; row < 8; row++) {
+        unsigned char bits = font8[ci][row];
+        for (col = 0; col < 8; col++) {
+            if (bits & (0x80 >> col))
+                title_plot(px + col, py + row, color);
+        }
+    }
+}
+
+// Draw text at angle using fixed-point rotation
+// cx, cy = starting position; each char is offset along the rotated baseline
+static void draw_text_angled(const char* text, int cx, int cy,
+                             unsigned short color, unsigned short outline) {
+    int i = 0;
+    while (text[i]) {
+        // Position along rotated baseline (fixed point /256)
+        int dx = (i * 8 * COS20) >> 8;
+        int dy = -(i * 8 * SIN20) >> 8;  // negative = upward angle
+        int px = cx + dx;
+        int py = cy + dy;
+        
+        // Outline
+        title_draw_char(text[i], px-1, py, outline);
+        title_draw_char(text[i], px+1, py, outline);
+        title_draw_char(text[i], px, py-1, outline);
+        title_draw_char(text[i], px, py+1, outline);
+        // Fill
+        title_draw_char(text[i], px, py, color);
+        i++;
+    }
+}
+
+// Draw horizontal text
+static void title_draw_text(const char* text, int x, int y,
+                      unsigned short color, unsigned short outline) {
+    int i = 0;
+    while (text[i]) {
+        int px = x + i * 8;
+        title_draw_char(text[i], px-1, y, outline);
+        title_draw_char(text[i], px+1, y, outline);
+        title_draw_char(text[i], px, y-1, outline);
+        title_draw_char(text[i], px, y+1, outline);
+        title_draw_char(text[i], px, y, color);
+        i++;
+    }
+}
+
+static int title_str_len(const char* s) { int n=0; while(s[n]) n++; return n; }
+
+static unsigned int title_rng = 54321;
+static unsigned int title_rand_next(void) {
+    title_rng = title_rng * 1103515245 + 12345;
+    return (title_rng >> 16) & 0x7FFF;
+}
+
+// Store BG pixels for the "Press START" region so we can restore them
+static unsigned short start_region[120 * 12]; // 120 wide, 12 tall
+
+// --- PSG Music Sequencer ---
+static int seq_index;        // current position in theme_notes
+static int seq_wait;         // frames until next event
+static int seq_frame;        // total frame counter for the song
+static int ch1_dur;          // remaining frames for ch1 note
+static int ch2_dur;          // remaining frames for ch2 note
+
+static void psg_init(void) {
+    // Enable master sound
+    REG_SOUNDCNT_X = 0x0080;
+    // PSG channels at full volume to both L+R
+    REG_SOUNDCNT_L = 0xFF77;  // L/R vol max, all channels to both outputs
+    REG_SOUNDCNT_H = 0x0002;  // PSG ratio = full
+    // Channel 1: no sweep
+    REG_SOUND1CNT_L = 0x0000;
+    // Channel 2: silent initially
+    REG_SOUND2CNT_L = 0x0000;
+    // Reset sequencer
+    seq_index = 0;
+    seq_wait = 0;
+    seq_frame = 0;
+    ch1_dur = 0;
+    ch2_dur = 0;
+}
+
+static void psg_play_note(int channel, int freq_reg, int volume, int duty) {
+    // duty: 0=12.5%, 1=25%, 2=50%, 3=75%
+    // volume: 0-15
+    // freq_reg: 0-2047
+    unsigned short env = (volume << 12) | 0x0000; // no sweep, instant vol
+    unsigned short duty_val = (duty << 6);
+    unsigned short freq = freq_reg | 0x8000; // bit 15 = restart
+    
+    if (channel == 0) {
+        REG_SOUND1CNT_H = duty_val | env;
+        REG_SOUND1CNT_X = freq;
+    } else {
+        REG_SOUND2CNT_L = duty_val | env;
+        REG_SOUND2CNT_H = freq;
+    }
+}
+
+static void psg_stop_channel(int channel) {
+    if (channel == 0) {
+        REG_SOUND1CNT_H = 0x0000;  // volume 0
+        REG_SOUND1CNT_X = 0x8000;  // restart with 0 vol
+    } else {
+        REG_SOUND2CNT_L = 0x0000;
+        REG_SOUND2CNT_H = 0x8000;
+    }
+}
+
+static void psg_update(void) {
+    seq_frame++;
+    
+    // Process any events due this frame
+    while (seq_index < THEME_NUM_EVENTS) {
+        if (seq_wait > 0) {
+            seq_wait--;
+            break;
+        }
+        // Fire this event
+        const NoteEvent* e = &theme_notes[seq_index];
+        int ch = e->channel;
+        psg_play_note(ch, e->freq, e->volume, 1); // duty=25%
+        if (ch == 0) ch1_dur = e->duration;
+        else         ch2_dur = e->duration;
+        
+        seq_index++;
+        // Load wait for next event
+        if (seq_index < THEME_NUM_EVENTS)
+            seq_wait = theme_notes[seq_index].wait;
+    }
+    
+    // Count down note durations, stop when done
+    if (ch1_dur > 0) { ch1_dur--; if (ch1_dur == 0) psg_stop_channel(0); }
+    if (ch2_dur > 0) { ch2_dur--; if (ch2_dur == 0) psg_stop_channel(1); }
+    
+    // Loop the song
+    if (seq_index >= THEME_NUM_EVENTS && ch1_dur == 0 && ch2_dur == 0) {
+        seq_index = 0;
+        seq_wait = theme_notes[0].wait;
+        seq_frame = 0;
+    }
+}
+
+void run_title_screen(void) {
+    REG_DISPCNT = TITLE_MODE_3 | TITLE_BG2_ENABLE;
+    
+    // --- 1. Draw background (once) ---
+    REG_DMA3SAD = (unsigned int)bg_bitmap;
+    REG_DMA3DAD = (unsigned int)TITLE_VRAM;
+    REG_DMA3CNT = (TITLE_SCREEN_W * TITLE_SCREEN_H) | DMA_ENABLE;
+    
+    // --- Start playing theme music (PSG) ---
+    psg_init();
+    seq_wait = theme_notes[0].wait;
+    
+    // --- 2. Draw logo (static, moved up) ---
+    int logo_x = (TITLE_SCREEN_W - 192) / 2;  // center 192px wide
+    int logo_y = 30;  // moved up
+    
+    title_blit_sprite(logo_0_pixels, logo_0_alpha, LOGO_0_W, LOGO_0_H,
+                logo_x, logo_y);
+    title_blit_sprite(logo_1_pixels, logo_1_alpha, LOGO_1_W, LOGO_1_H,
+                logo_x + 64, logo_y);
+    title_blit_sprite(logo_2_pixels, logo_2_alpha, LOGO_2_W, LOGO_2_H,
+                logo_x + 128, logo_y);
+    
+    // --- 3. Draw splash text (centered below logo) ---
+    const char* splash = "Now on Game Boy!";
+    int slen = title_str_len(splash);
+    int splash_x = (TITLE_SCREEN_W - slen * 8) / 2;
+    int splash_y = logo_y + 62;
+    
+    title_draw_text(splash, splash_x, splash_y,
+              0x03FF,   // bright yellow
+              0x0000);  // black outline
+    
+    // --- 4. Save the "Press START" background region for blinking ---
+    {
+        int sx = (TITLE_SCREEN_W - 120) / 2;
+        int sy = 140;
+        int x, y;
+        for (y = 0; y < 12; y++)
+            for (x = 0; x < 120; x++)
+                start_region[y * 120 + x] = TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)];
+    }
+    
+    // --- 5. Main loop: blink text + play music ---
+    unsigned int frame = 0;
+    int prev_visible = -1;
+    
+    while (1) {
+        title_vsync();
+        frame++;
+        seed += 13;
+        
+        // Update music sequencer
+        psg_update();
+        
+        // Stop title screen logic when user presses START
+        if (~REG_KEYINPUT & KEY_START) {
+            // Wait for key release to prevent skipping right into the game instantly (optional but nice)
+            while (~REG_KEYINPUT & KEY_START) {
+                title_vsync();
+            }
+            
+            // Stop sound
+            psg_stop_channel(0);
+            psg_stop_channel(1);
+            
+            // Clear screen
+            for (int i=0; i<TITLE_SCREEN_W * TITLE_SCREEN_H; i++) {
+                TITLE_VRAM[i] = 0;
+            }
+            break; // Exit the loop to start the main game
+        }
+        
+        int visible = (frame / 30) & 1;
+        
+        // Only redraw when blink state changes
+        if (visible != prev_visible) {
+            prev_visible = visible;
+            
+            int sx = (TITLE_SCREEN_W - 120) / 2;
+            int sy = 140;
+            
+            if (visible) {
+                // Restore background first
+                {
+                    int x, y;
+                    for (y = 0; y < 12; y++)
+                        for (x = 0; x < 120; x++)
+                            TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 120 + x];
+                }
+                // Draw text
+                title_draw_text("- Press START -", sx, sy + 1,
+                          0x7FFF,   // white
+                          0x0000);  // black outline
+            } else {
+                // Restore background (erase text)
+                int x, y;
+                for (y = 0; y < 12; y++)
+                    for (x = 0; x < 120; x++)
+                        TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 120 + x];
+            }
+        }
+    }
+}
