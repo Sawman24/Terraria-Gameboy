@@ -19,12 +19,16 @@ TILE_DEFS = [
     ("Iron", r"Tiles\Tiles_6.png", 9, 9),   # 7
     ("Planks", r"Tiles\Tiles_30.png", 9, 9), # 8
     ("Torch", r"Tiles\Tiles_4.png", 0, 0),  # 9
-    ("Black", None, 0, 0),                  # 10
+    ("Ash", r"Tiles\Tiles_57.png", 9, 9),   # 10
     ("GrassPlants", r"Tiles\Tiles_3.png", 0, 0), # 11
+    ("Lava", None, 0, 0),                    # 12
+    ("Furnace", r"Tiles\Tiles_17.png", 8, 0),    # 13
+    ("Workbench", r"Tiles\Tiles_18.png", 1, 0),  # 14
+    ("Chest", r"Tiles\Tiles_21.png", 8, 0),      # 15
 ]
 
-IN_DIR = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets"
-OUT_HEADER = r"c:\Users\sawye\Desktop\Terraria Beta\gba_core\tileset.h"
+IN_DIR = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets"
+OUT_HEADER = r"c:\Users\sawye\Desktop\Terraria GBA\gba_core\tileset.h"
 
 # 1. Collect all unique colors across these tiles for an 8bpp (256-color) palette
 colors = [(132, 170, 248)] # Index 0 = Sky Blue (transparent in our tiles)
@@ -55,9 +59,15 @@ for name, filename, px, py in TILE_DEFS:
         
     img = Image.open(path).convert("RGBA")
     
+    tile_img = img.crop((px, py, px + 8, py + 8))
+    
+    # If it's one of our new furniture tiles, let's grab the 16x16 and downscale to 8x8 to make it look better
+    if name in ["Furnace", "Workbench", "Chest"]:
+        tile_img = img.crop((px, py, px + 16, py + 16)).resize((8, 8), resample=Image.LANCZOS)
+
     for y in range(8):
         for x in range(8):
-            rgb_val = img.getpixel((px + x, py + y))
+            rgb_val = tile_img.getpixel((x, y))
             # Treat pure magenta as transparent/padding as well
             magenta = (rgb_val[0] == 247 and rgb_val[2] == 249) or (rgb_val[0]==255 and rgb_val[2]==255 and rgb_val[1]==0)
             

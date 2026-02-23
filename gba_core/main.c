@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include "world_gen.h"
 #include "tileset.h"
 #include "sprite_gfx.h"
@@ -11,6 +12,7 @@ typedef struct {
     int x, y, dx, dy;
     int hp;
     int active;
+    int type; // 0=Green, 1=Cave
     int jump_timer;
     int flicker;
     int stuck_timer;
@@ -73,28 +75,28 @@ static void fill_bg_map(int start_tile) {
 }
 
 static void draw_clouds() {
-    // Cloud 0: 8x4 tiles, start index 183
-    // Cloud 1: 6x2 tiles, start index 215
-    // Cloud 2: 5x3 tiles, start index 227
+    // Cloud 0: 8x4 tiles, start index 187
+    // Cloud 1: 6x2 tiles, start index 219
+    // Cloud 2: 5x3 tiles, start index 231
     
     // Cloud 0 at (2, 2)
     for(int ty=0; ty<4; ty++) {
         for(int tx=0; tx<8; tx++) {
-            bg_map[(2 + ty) * 32 + (2 + tx)] = 183 + (ty * 8) + tx;
+            bg_map[(2 + ty) * 32 + (2 + tx)] = 187 + (ty * 8) + tx;
         }
     }
     
     // Cloud 1 at (15, 6)
     for(int ty=0; ty<2; ty++) {
         for(int tx=0; tx<6; tx++) {
-            bg_map[(6 + ty) * 32 + (15 + tx)] = 215 + (ty * 6) + tx;
+            bg_map[(6 + ty) * 32 + (15 + tx)] = 219 + (ty * 6) + tx;
         }
     }
     
     // Cloud 2 at (24, 3)
     for(int ty=0; ty<3; ty++) {
         for(int tx=0; tx<5; tx++) {
-            bg_map[(3 + ty) * 32 + (24 + tx)] = 227 + (ty * 5) + tx;
+            bg_map[(3 + ty) * 32 + (24 + tx)] = 231 + (ty * 5) + tx;
         }
     }
 }
@@ -169,9 +171,9 @@ int is_solid(int px, int py) {
     int tx = px / 8;
     int ty = py / 8;
     int tile = world_map[ty][tx];
-    // Nonsolid: Air, Wood, Leaves, Tree Tops (12-86), Branches (87-110), and Torch (9)
+    // Nonsolid: Air, Wood, Leaves, GrassPlants (11), Lava (12), Furniture (13-15), Tree Tops (16-90), Branches (91-114), Walls & Clouds (115+)
     if (tile == TILE_AIR || tile == TILE_WOOD || tile == TILE_LEAVES || tile == TILE_TORCH) return 0;
-    if (tile >= 11 && tile <= 110) return 0;
+    if (tile >= 11 && tile <= 250) return 0;
     return 1;
 }
 
@@ -225,7 +227,7 @@ int main(void) {
         MEM_BG_TILES[i] = src_gfx[i];
     }
     
-    fill_bg_map(111); // Start with BG2 (Dirt Walls)
+    fill_bg_map(115); // Start with BG2 (Dirt Walls)
     
     // Clear map
     for (int i=0; i<32*32; i++) {
@@ -312,6 +314,8 @@ int main(void) {
         prev_keys = curr_keys;
         curr_keys = REG_KEYINPUT;
         seed += 7; // Update seed for randomness during gameplay
+        int ix = p_x >> 8;
+        int iy = p_y >> 8;
         
         if (KEY_PRESSED(KEY_SELECT) && !inv_open) {
             mining_mode = !mining_mode;
@@ -363,34 +367,11 @@ int main(void) {
                     if(hotbar_id[s] == TILE_PLANKS) plank_count += hotbar_count[s];
                     if(hotbar_id[s] == ITEM_GEL) gel_count += hotbar_count[s];
                 }
-                if(wood_count >= 1) can_craft[0] = 1;
                 if(plank_count >= 1 && gel_count >= 1) can_craft[1] = 1;
                 
                 if (KEY_PRESSED(KEY_A) && can_craft[inv_cursor]) {
-                    // ... (existing result addition)
-                    if (inv_cursor == 0) { // Wood to Planks
-                        for(int s=0; s<12; s++) { 
-                            if(hotbar_id[s] == TILE_WOOD && hotbar_count[s] > 0) { 
-                                hotbar_count[s]--; 
-                                if (hotbar_count[s] == 0) hotbar_id[s] = 0;
-                                break; 
-                            } 
-                        }
-                        for(int p=0; p<4; p++) {
-                            int added = 0;
-                            for(int s=0; s<12; s++) {
-                                if(hotbar_id[s] == TILE_PLANKS && hotbar_count[s] > 0 && hotbar_count[s] < 99) {
-                                    hotbar_count[s]++; added = 1; break;
-                                }
-                            }
-                            if(!added) {
-                                for(int s=2; s<12; s++) {
-                                    if(hotbar_count[s] == 0 && hotbar_id[s] != ITEM_SWORD && hotbar_id[s] != ITEM_PICKAXE) {
-                                        hotbar_id[s] = TILE_PLANKS; hotbar_count[s] = 1; break;
-                                    }
-                                }
-                            }
-                        }
+                    if (inv_cursor == 0) { 
+                        // Slot 0 empty for now
                     } else if (inv_cursor == 1) { // 1 Plank + 1 Gel = 3 Torches
                         int p_left = 1, g_left = 1;
                         for(int s=0; s<12; s++) {
@@ -470,8 +451,8 @@ int main(void) {
             }
             
             // Mine/Place Block
-            int ix = p_x >> 8;
-            int iy = p_y >> 8;
+            ix = p_x >> 8;
+            iy = p_y >> 8;
             int cx = ((ix + 16) / 8) + cursor_dx;
             int cy = ((iy + 16) / 8) + cursor_dy;
             
@@ -487,31 +468,34 @@ int main(void) {
                             if (drop == TILE_GRASS) drop = TILE_DIRT; // Grass turns to dirt
                             
                             int amt = 1; // Default drop
-                            // Tree felling logic (Wood, Leaves, and variants)
-                            if (target == TILE_WOOD || target == TILE_LEAVES || (target >= 11 && target <= 110)) {
-                                drop = TILE_WOOD;
+                            // Tree felling logic (Trigger only on Trunk)
+                            if (target == TILE_WOOD) {
+                                drop = TILE_PLANKS;
                                 amt = 0;
                                 int yy = cy;
                                 // Climb the tree
                                 while (yy >= 0) {
                                     int t_center = world_map[yy][cx];
-                                    if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 11 && t_center <= 110)) {
+                                    if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 16 && t_center <= 114)) {
                                         // Clear a 5-wide area left and right (clears canopy)
                                         for (int lx = cx - 2; lx <= cx + 2; lx++) {
                                             if (lx >= 0 && lx < WORLD_W) {
                                                 int t = world_map[yy][lx];
-                                                if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 11 && t <= 110)) {
+                                                if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 16 && t <= 114)) {
                                                     world_map[yy][lx] = TILE_AIR;
                                                     hw_map[(yy % 32) * 32 + (lx % 32)] = TILE_AIR;
                                                 }
                                             }
                                         }
-                                        amt++; // 1 Wood per vertical slice
+                                        amt++; // 1 Plank per vertical slice
                                         yy--;
                                     } else {
                                         break;
                                     }
                                 }
+                            } else if (target == TILE_LEAVES || (target >= 16 && target <= 114)) {
+                                // Decorative parts can't be broken directly
+                                amt = 0;
                             } else {
                                 world_map[cy][cx] = TILE_AIR; // Destroy single block
                                 hw_map[(cy % 32) * 32 + (cx % 32)] = TILE_AIR;
@@ -538,10 +522,13 @@ int main(void) {
                         }
                     } else if (cur_id == ITEM_SWORD) {
                         if (swing_timer == 0) swing_timer = 15;
-                    } else if (cur_count > 0 && swing_timer == 0 && cur_id != ITEM_GEL) { // Place Block
-                        if (world_map[cy][cx] == TILE_AIR) {
+                    } else if (cur_id != ITEM_PICKAXE && cur_count > 0 && swing_timer == 0 && cur_id != ITEM_GEL && cur_id != ITEM_COPPER_ORE && cur_id != ITEM_IRON_ORE && cur_id != ITEM_COPPER_BAR && cur_id != ITEM_IRON_BAR && cur_id != ITEM_WORKBENCH && cur_id != ITEM_FURNACE && cur_id != ITEM_CHEST) { // Place Block
+                        if (!is_solid(cx * 8, cy * 8)) {
                             int tile_to_place = cur_id;
                             if (cur_id == ITEM_TORCH) tile_to_place = TILE_TORCH;
+                            else if (cur_id == ITEM_WORKBENCH) tile_to_place = TILE_WORKBENCH;
+                            else if (cur_id == ITEM_FURNACE) tile_to_place = TILE_FURNACE;
+                            else if (cur_id == ITEM_CHEST) tile_to_place = TILE_CHEST;
                             
                             world_map[cy][cx] = tile_to_place;
                             hw_map[(cy % 32) * 32 + (cx % 32)] = tile_to_place;
@@ -579,10 +566,6 @@ int main(void) {
             swing_frame = (14 - swing_timer) / 5; // 0, 1, 2
         }
         
-        // Move X
-        int ix = p_x >> 8;
-        int iy = p_y >> 8;
-
         // Break foliage in front of player when swinging (Outside of Build Mode)
         if (swing_timer == 14 && !mining_mode) { 
             int fx_center = ix + (facing_left ? -8 : 16);
@@ -635,13 +618,13 @@ int main(void) {
                     if (tx < 0 || tx >= WORLD_W) continue;
                     
                     // Prioritize straight ahead, then top, then bottom
-                    if (smart_cx == -1 && py_tile >= 0 && py_tile < WORLD_H && world_map[py_tile][tx] != TILE_AIR && world_map[py_tile][tx] != TILE_GRASS_PLANTS) {
+                    if (smart_cx == -1 && py_tile >= 0 && py_tile < WORLD_H && world_map[py_tile][tx] != TILE_AIR && world_map[py_tile][tx] != TILE_GRASS_PLANTS && world_map[py_tile][tx] != TILE_LEAVES && (world_map[py_tile][tx] < 16 || world_map[py_tile][tx] > 114)) {
                         smart_cx = tx; smart_cy = py_tile; break;
                     }
-                    if (smart_cx == -1 && py_tile - 1 >= 0 && world_map[py_tile - 1][tx] != TILE_AIR && world_map[py_tile - 1][tx] != TILE_GRASS_PLANTS) {
+                    if (smart_cx == -1 && py_tile - 1 >= 0 && world_map[py_tile - 1][tx] != TILE_AIR && world_map[py_tile - 1][tx] != TILE_GRASS_PLANTS && world_map[py_tile - 1][tx] != TILE_LEAVES && (world_map[py_tile - 1][tx] < 16 || world_map[py_tile - 1][tx] > 114)) {
                         smart_cx = tx; smart_cy = py_tile - 1; break;
                     }
-                    if (smart_cx == -1 && py_tile + 1 < WORLD_H && world_map[py_tile + 1][tx] != TILE_AIR && world_map[py_tile + 1][tx] != TILE_GRASS_PLANTS) {
+                    if (smart_cx == -1 && py_tile + 1 < WORLD_H && world_map[py_tile + 1][tx] != TILE_AIR && world_map[py_tile + 1][tx] != TILE_GRASS_PLANTS && world_map[py_tile + 1][tx] != TILE_LEAVES && (world_map[py_tile + 1][tx] < 16 || world_map[py_tile + 1][tx] > 114)) {
                         smart_cx = tx; smart_cy = py_tile + 1; break;
                     }
                 }
@@ -651,21 +634,26 @@ int main(void) {
                 int target = world_map[smart_cy][smart_cx];
                 int drop = target;
                 if (drop == TILE_GRASS) drop = TILE_DIRT;
+                else if (drop == TILE_COPPER) drop = ITEM_COPPER_ORE;
+                else if (drop == TILE_IRON) drop = ITEM_IRON_ORE;
+                else if (drop == TILE_WORKBENCH) drop = ITEM_WORKBENCH;
+                else if (drop == TILE_FURNACE) drop = ITEM_FURNACE;
+                else if (drop == TILE_CHEST) drop = ITEM_CHEST;
                 
                 int amt = 1;
-                if (target == TILE_WOOD || target == TILE_LEAVES || (target >= 11 && target <= 110)) {
-                    drop = TILE_WOOD;
+                if (target == TILE_WOOD) {
+                    drop = TILE_PLANKS;
                     amt = 0;
                     int ty = smart_cy;
                     while (ty >= 0) {
                         int t_center = world_map[ty][smart_cx];
-                        if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 11 && t_center <= 110)) {
+                        if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 16 && t_center <= 114)) {
                             world_map[ty][smart_cx] = TILE_AIR;
                             hw_map[(ty % 32) * 32 + (smart_cx % 32)] = TILE_AIR;
                             for (int lx = smart_cx - 2; lx <= smart_cx + 2; lx++) {
                                 if (lx >= 0 && lx < WORLD_W) {
                                     int t = world_map[ty][lx];
-                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 11 && t <= 110)) {
+                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 16 && t <= 114)) {
                                         world_map[ty][lx] = TILE_AIR;
                                         hw_map[(ty % 32) * 32 + (lx % 32)] = TILE_AIR;
                                     }
@@ -677,6 +665,9 @@ int main(void) {
                             break;
                         }
                     }
+                } else if (target == TILE_LEAVES || (target >= 16 && target <= 114)) {
+                    // Decorative parts can't be broken directly
+                    amt = 0;
                 } else {
                     world_map[smart_cy][smart_cx] = TILE_AIR;
                     hw_map[(smart_cy % 32) * 32 + (smart_cx % 32)] = TILE_AIR;
@@ -765,20 +756,26 @@ int main(void) {
 
         // 5. Update Slimes
         if (!inv_open) {
-            if ((seed % 1500) < 1) { // 1 in 1500 frames
+            // Increased spawn frequency (1 in 800 frames)
+            if ((seed % 800) < 1) { 
                 for (int i = 0; i < MAX_SLIMES; i++) {
                     if (!slimes[i].active) {
-                        int rx_off = (seed % 300) - 150;
-                        if (rx_off > -30 && rx_off < 30) rx_off = 50; // Safety zone
+                        int rx_off = (seed % 240) - 120;
+                        if (rx_off > -30 && rx_off < 30) rx_off = 60; // Safety zone
                         int rx = (p_x >> 8) + rx_off;
                         if (rx < 0) rx = 0; if (rx >= WORLD_W*8) rx = WORLD_W*8-1;
                         
-                        // Find surface at rx
+                        // Find a floor near player's depth
                         int tx = rx / 8;
+                        int py_tile = (p_y >> 11); // Start search slightly above player
+                        int start_ty = py_tile - 10;
+                        if (start_ty < 1) start_ty = 1;
+                        
                         int found_y = -1;
-                        for (int ty = 2; ty < WORLD_H; ty++) { // scan from a bit down
-                            if (world_map[ty][tx] != TILE_AIR) {
-                                found_y = (ty * 8) - 31; // Bottom of sprite (31) at top of block (ty*8) 
+                        for (int ty = start_ty; ty < WORLD_H; ty++) {
+                            // Find first transition from AIR to SOLID
+                            if (world_map[ty][tx] != TILE_AIR && world_map[ty-1][tx] == TILE_AIR) {
+                                found_y = (ty * 8) - 31; 
                                 break;
                             }
                         }
@@ -787,7 +784,9 @@ int main(void) {
                             slimes[i].x = rx << 8;
                             slimes[i].y = found_y << 8;
                             slimes[i].dx = 0; slimes[i].dy = 0;
-                            slimes[i].hp = 30; slimes[i].active = 1;
+                            slimes[i].type = (found_y / 8 > 35) ? 1 : 0;
+                            slimes[i].hp = (slimes[i].type == 1) ? 35 : 14; 
+                            slimes[i].active = 1;
                             slimes[i].jump_timer = 60 + (seed % 60);
                             slimes[i].flicker = 0;
                             slimes[i].stuck_timer = 0;
@@ -807,10 +806,10 @@ int main(void) {
                 int sx = slimes[i].x >> 8;
                 int sy = slimes[i].y >> 8;
                 
-                // Despawn if too far from player
+                // Stricter despawning
                 int dist_x = sx - p_sx;
                 int dist_y = sy - p_sy;
-                if (dist_x*dist_x + dist_y*dist_y > 400*400) {
+                if (abs(dist_x) > 320 || abs(dist_y) > 200) {
                     slimes[i].active = 0;
                     continue;
                 }
@@ -1013,7 +1012,14 @@ int main(void) {
                     else if (id == TILE_STONE) item_base = 426; 
                     else if (id == TILE_WOOD) item_base = 458; 
                     else if (id == TILE_PLANKS) item_base = 490; 
-                    else if (id == ITEM_GEL) item_base = 650;
+                    else if (id == ITEM_GEL) item_base = 714;
+                    else if (id == ITEM_COPPER_ORE) item_base = 746;
+                    else if (id == ITEM_IRON_ORE) item_base = 778;
+                    else if (id == ITEM_COPPER_BAR) item_base = 810;
+                    else if (id == ITEM_IRON_BAR) item_base = 842;
+                    else if (id == ITEM_WORKBENCH) item_base = 874;
+                    else if (id == ITEM_FURNACE) item_base = 906;
+                    else if (id == ITEM_CHEST) item_base = 938;
                 }
                 
                 if (item_base > 0) {
@@ -1045,12 +1051,12 @@ int main(void) {
                     if (tens > 0) {
                         oam[i*2 + 8].attr0 = (num_y & 0x00FF) | 0x2000;
                         oam[i*2 + 8].attr1 = ((num_x - 4) & 0x01FF) | 0x0000;
-                        oam[i*2 + 8].attr2 = 682 + (tens * 2);
+                        oam[i*2 + 8].attr2 = 970 + (tens * 2);
                     } else { oam[i*2 + 8].attr0 = 0x0200; }
                     
                     oam[i*2 + 9].attr0 = (num_y & 0x00FF) | 0x2000;
                     oam[i*2 + 9].attr1 = (num_x & 0x01FF) | 0x0000;
-                    oam[i*2 + 9].attr2 = 682 + (ones * 2);
+                    oam[i*2 + 9].attr2 = 970 + (ones * 2);
                 } else {
                     oam[i*2 + 8].attr0 = 0x0200; oam[i*2 + 9].attr0 = 0x0200;
                 }
@@ -1067,8 +1073,8 @@ int main(void) {
                 oam[r + 56].attr2 = 42;
                 
                 // Result Item
-                int res_id = (r == 0) ? TILE_PLANKS : ITEM_TORCH;
-                int res_base = (r == 0) ? 490 : 330;
+                int res_id = (r == 0) ? 0 : ITEM_TORCH; // Slot 0 removed
+                int res_base = (r == 0) ? 0 : 330;
                 oam[r + 32].attr0 = (ry & 0x00FF) | 0x2000;
                 oam[r + 32].attr1 = (rx & 0x01FF) | 0x8000;
                 oam[r + 32].attr2 = res_base;
@@ -1085,11 +1091,11 @@ int main(void) {
                     if (tens > 0) {
                         oam[r*2 + 8].attr0 = (num_y & 0x00FF) | 0x2000;
                         oam[r*2 + 8].attr1 = ((num_x - 4) & 0x01FF) | 0x0000;
-                    oam[r*2 + 8].attr2 = 682 + (tens * 2);
+                    oam[r*2 + 8].attr2 = 970 + (tens * 2);
                 } else { oam[r*2 + 8].attr0 = 0x0200; }
                 oam[r*2 + 9].attr0 = (num_y & 0x00FF) | 0x2000;
                 oam[r*2 + 9].attr1 = (num_x & 0x01FF) | 0x0000;
-                oam[r*2 + 9].attr2 = 682 + (ones * 2);
+                oam[r*2 + 9].attr2 = 970 + (ones * 2);
                 } else {
                     oam[r*2 + 8].attr0 = 0x0200; oam[r*2 + 9].attr0 = 0x0200;
                 }
@@ -1158,9 +1164,9 @@ int main(void) {
                 for (int i = 0; i < 32 * 32; i++) bg_map[i] = 0;
                 draw_clouds();
             } else if (current_bg_type == 1) {
-                fill_bg_map(111); 
+                fill_bg_map(115); 
             } else if (current_bg_type == 2) {
-                fill_bg_map(147); 
+                fill_bg_map(151); 
             }
             last_bg_type = current_bg_type;
         }
@@ -1177,7 +1183,8 @@ int main(void) {
                 if (sx > -32 && sx < 240 && sy > -32 && sy < 160) {
                     oam[i + 80].attr0 = (sy & 0x00FF) | 0x2000;
                     oam[i + 80].attr1 = (sx & 0x01FF) | 0x8000;
-                    oam[i + 80].attr2 = (slimes[i].dy < 0) ? 618 : 586; // Frame 1 for jumping
+                    int base_tile = (slimes[i].type == 1) ? 650 : 586;
+                    oam[i + 80].attr2 = (slimes[i].dy < 0) ? (base_tile + 32) : base_tile; // Frame 1 for jumping
                 } else oam[i + 80].attr0 = 0x0200;
             } else oam[i + 80].attr0 = 0x0200;
         }
@@ -1188,7 +1195,7 @@ int main(void) {
             int sun_sy = -10 - (cam_y / 16);
             oam[127].attr0 = (sun_sy & 0x00FF) | 0x2000;
             oam[127].attr1 = (sun_sx & 0x01FF) | 0x8000;
-            oam[127].attr2 = 702 | 0x0800; // Priority 2 (behind clouds)
+            oam[127].attr2 = 990 | 0x0800; // Priority 2 (behind clouds)
         } else {
             oam[127].attr0 = 0x0200; // Hide
         }
@@ -1200,7 +1207,7 @@ int main(void) {
             if (cx_draw > -8 && cx_draw < 240 && cy_draw > -8 && cy_draw < 160) {
                 oam[126].attr0 = (cy_draw & 0x00FF) | 0x2000;
                 oam[126].attr1 = (cx_draw & 0x01FF) | 0x0000; // 8x8 size
-                oam[126].attr2 = 734; // Tile 367 * 2
+                oam[126].attr2 = 1022; // Tile 511 * 2
             } else {
                 oam[126].attr0 = 0x0200;
             }

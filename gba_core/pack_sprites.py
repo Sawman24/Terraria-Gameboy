@@ -1,9 +1,9 @@
 import os
 from PIL import Image
 
-in_dir = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Player"
-hud_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Heart.png"
-out_h = r"c:\Users\sawye\Desktop\Terraria Beta\gba_core\sprite_gfx.h"
+in_dir = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Player"
+hud_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Heart.png"
+out_h = r"c:\Users\sawye\Desktop\Terraria GBA\gba_core\sprite_gfx.h"
 
 # Components that make up a player (bottom to top)
 LAYERS_STATIC = [
@@ -96,7 +96,7 @@ if os.path.exists(hud_path):
 slice_to_tiles(img_heart, 2, 2)
 
 # --- 3. Extract Cursor ---
-cursor_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Cursor.png"
+cursor_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Cursor.png"
 img_cursor = Image.new("RGBA", (8, 8), (0,0,0,0))
 if os.path.exists(cursor_path):
     cursor = Image.open(cursor_path).convert("RGBA")
@@ -105,7 +105,7 @@ if os.path.exists(cursor_path):
 slice_to_tiles(img_cursor, 1, 1)
 
 # --- 4. Extract Inventory Box & Select ---
-inv_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Inventory_Back.png"
+inv_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Inventory_Back.png"
 img_inv = Image.new("RGBA", (32, 32), (0,0,0,0))
 if os.path.exists(inv_path):
     inv = Image.open(inv_path).convert("RGBA")
@@ -113,7 +113,7 @@ if os.path.exists(inv_path):
 # Add Inventory Back (4x4 = 16 tiles)
 slice_to_tiles(img_inv, 4, 4)
 
-sel_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Inventory_Select.png"
+sel_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Inventory_Select.png"
 img_sel = Image.new("RGBA", (32, 32), (0,0,0,0))
 if os.path.exists(sel_path):
     sel = Image.open(sel_path).convert("RGBA")
@@ -124,9 +124,9 @@ slice_to_tiles(img_sel, 4, 4)
 # --- 5. Extract Tools (Sword & Pickaxe) ---
 # We will create 3 frames of swinging for each, in a 32x32 bounding box so they don't clip.
 tools = [
-     r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Items\Item_4.png", # Sword
-     r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Items\Item_1.png", # Pickaxe
-     r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Items\Item_8.png", # Torch
+     r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_4.png", # Sword
+     r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_1.png", # Pickaxe
+     r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_8.png", # Torch
 ]
 
 for tool_path in tools:
@@ -145,22 +145,25 @@ for tool_path in tools:
 # --- 6. Extract Blocks (Dirt & Stone) ---
 # We use existing Tiles_0 and Tiles_1, crop them at 9,9 for the 8x8 generic block, resize to 16x16.
 blocks = [
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_0.png", (9, 9, 17, 17)), # Dirt
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_1.png", (9, 9, 17, 17)), # Stone
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_5.png", (1, 0, 9, 8)),   # Wood
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_30.png", (9, 9, 17, 17)), # Planks
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_59.png", (9, 9, 17, 17)), # Mud
-     (r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Tiles\Tiles_60.png", (9, 0, 17, 8)), # Jungle Grass
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Tiles\Tiles_0.png", (9, 9, 17, 17)), # Dirt
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Tiles\Tiles_1.png", (9, 9, 17, 17)), # Stone
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Tiles\Tiles_5.png", (1, 0, 9, 8)),   # Wood
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_9.png", None),          # Planks
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Tiles\Tiles_59.png", (9, 9, 17, 17)), # Mud
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Tiles\Tiles_60.png", (9, 0, 17, 8)), # Jungle Grass
 ]
 for p, crop_box in blocks:
     if os.path.exists(p):
         img = Image.open(p).convert("RGBA")
-        crop = img.crop(crop_box)
-        crop = crop.resize((16, 16), resample=Image.NEAREST)
-        
-        filtered = Image.new("RGBA", (16, 16))
-        for y in range(16):
-            for x in range(16):
+        if crop_box:
+            crop = img.crop(crop_box)
+            crop = crop.resize((16, 16), resample=Image.NEAREST)
+        else:
+            crop = img # Use Item_9.png directly
+
+        filtered = Image.new("RGBA", (crop.width, crop.height))
+        for y in range(crop.height):
+            for x in range(crop.width):
                 r,g,b,a = crop.getpixel((x,y))
                 if a < 128 or (r == 247 and b == 249) or (r==255 and g==255 and b==0):
                     filtered.putpixel((x,y), (0,0,0,0))
@@ -168,11 +171,12 @@ for p, crop_box in blocks:
                     filtered.putpixel((x,y), (r,g,b,255))
         
         padded = Image.new("RGBA", (32, 32), (0,0,0,0))
-        padded.alpha_composite(filtered, (8, 8)) # Center the 16x16 scaling block in the 32x32 bounding box
+        # Center in 32x32
+        padded.alpha_composite(filtered, ((32-filtered.width)//2, (32-filtered.height)//2))
         slice_to_tiles(padded, 4, 4)
 
 # --- 7. Extract Slime NPC ---
-npc_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\NPCs\NPC_1.png"
+npc_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\NPCs\NPC_1.png"
 if os.path.exists(npc_path):
     slime_raw = Image.open(npc_path).convert("RGBA")
     slime = apply_tint(slime_raw, (100, 255, 100))
@@ -184,16 +188,74 @@ if os.path.exists(npc_path):
         padded.alpha_composite(frame, (8, 19)) # 32-13=19 to align bottom
         slice_to_tiles(padded, 4, 4)
 
+# --- 7b. Extract Cave Slime NPC (NPC_16) ---
+npc16_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\NPCs\NPC_16.png"
+if os.path.exists(npc16_path):
+    slime_raw = Image.open(npc16_path).convert("RGBA")
+    # Tint it RED as requested
+    slime = apply_tint(slime_raw, (255, 100, 100))
+    # NPC_16 is 22x33. Assuming 2 frames of ~16px height
+    for f in range(2):
+        frame = slime.crop((0, f*16, 22, (f+1)*16))
+        # Center in 32x32
+        padded = Image.new("RGBA", (32, 32), (0,0,0,0))
+        # 32-22=10, so x=5. 32-16=16 to align bottom
+        padded.alpha_composite(frame, (5, 16))
+        slice_to_tiles(padded, 4, 4)
+
 # --- 8. Extract Gel Item ---
-gel_path = r"c:\Users\sawye\Desktop\Terraria Beta\DumpedAssets\Items\Item_23.png"
+gel_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_23.png"
 if os.path.exists(gel_path):
     gel = Image.open(gel_path).convert("RGBA")
     # Tint it green (100, 255, 100)
     gel_tinted = apply_tint(gel, (100, 255, 100))
     padded = Image.new("RGBA", (32, 32), (0,0,0,0))
-    # Center 16x14 in 32x32
-    padded.alpha_composite(gel_tinted, (8, 9))
+    # Item_23 is actually 8x7, so pad with 12 to center (12+8+12=32, 12+7+13=32)
+    padded.alpha_composite(gel_tinted, (12, 12))
     slice_to_tiles(padded, 4, 4)
+
+# --- 8b. Extract Ores (Copper & Iron) ---
+ores = [
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_12.png", (255, 255, 255)), # Copper
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_11.png", (255, 255, 255)), # Iron
+]
+for ore_path, tint in ores:
+    if os.path.exists(ore_path):
+        ore = Image.open(ore_path).convert("RGBA")
+        ore_tinted = apply_tint(ore, tint)
+        padded = Image.new("RGBA", (32, 32), (0,0,0,0))
+        # 8x8 centered in 32x32
+        padded.alpha_composite(ore_tinted, (12, 12))
+        slice_to_tiles(padded, 4, 4)
+
+# --- 8c. Extract Bars (Copper & Iron) ---
+bars = [
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_20.png", (255, 255, 255)), # Copper
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_22.png", (255, 255, 255)), # Iron
+]
+for bar_path, tint in bars:
+    if os.path.exists(bar_path):
+        bar = Image.open(bar_path).convert("RGBA")
+        bar_tinted = apply_tint(bar, tint)
+        padded = Image.new("RGBA", (32, 32), (0,0,0,0))
+        # 15x12 centered in 32x32 -> (32-15)/2 = 8.5, (32-12)/2 = 10
+        padded.alpha_composite(bar_tinted, (8, 10))
+        slice_to_tiles(padded, 4, 4)
+
+# --- 8d. Extract Furniture Items (Workbench, Furnace, Chest) ---
+furniture = [
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_36.png", (255, 255, 255)), # Workbench
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_33.png", (255, 255, 255)), # Furnace
+     (r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Items\Item_48.png", (255, 255, 255)), # Chest
+]
+for p, tint in furniture:
+    if os.path.exists(p):
+        img = Image.open(p).convert("RGBA")
+        tinted = apply_tint(img, tint)
+        padded = Image.new("RGBA", (32, 32), (0,0,0,0))
+        # Center: (32-w)//2, (32-h)//2
+        padded.alpha_composite(tinted, ((32-img.width)//2, (32-img.height)//2))
+        slice_to_tiles(padded, 4, 4)
 
 # --- 9. Extract Number Font ---
 # 0-9 in a 3x5 format
@@ -221,7 +283,7 @@ for digit in font_data:
     slice_to_tiles(img_digit, 1, 1)
 
 # --- 10. Extract Sun (32x32 = 4x4 tiles, resized to 75%) ---
-sun_sprite_p = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Sun.png"
+sun_sprite_p = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Sun.png"
 if os.path.exists(sun_sprite_p):
     sun_raw = Image.open(sun_sprite_p).convert("RGBA")
     # Scale to 75% of 32x32 = 24x24
@@ -236,7 +298,7 @@ else:
         all_tiles_8bpp.append([0]*64)
 
 # --- 11. Extract Smart Cursor ---
-smart_cursor_path = r"c:\Users\sawye\Desktop\Terraria Beta\GBA_Assets\Misc\Smart_Cursor.png"
+smart_cursor_path = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets\Misc\Smart_Cursor.png"
 img_smart_cursor = Image.new("RGBA", (8, 8), (0,0,0,0))
 if os.path.exists(smart_cursor_path):
     smart_cursor = Image.open(smart_cursor_path).convert("RGBA")

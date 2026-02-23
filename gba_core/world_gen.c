@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "world_gen.h"
 
 unsigned char __attribute__((section(".ewram"))) world_map[WORLD_H][WORLD_W];
@@ -28,39 +29,35 @@ static void smooth_heightmap(int* heights) {
 }
 
 // Cellular Automata for Cave Generation
+// Cellular Automata for Cave Generation
 static void generate_caves() {
-    // We do a small version to keep it fast on GBA
-    // We only process underground tiles
-    
-    // Pass 1: Random noise (0 or 1)
-    for (int y = 35; y < WORLD_H - 10; y++) {
+    // Pass 1: Random noise (Jittered chance per area for variation)
+    for (int y = 45; y < WORLD_H - 10; y++) {
+        int base_chance = 45 + (y % 10); // Jitter by depth
         for (int x = 5; x < WORLD_W - 5; x++) {
-            // Chance to be a cave (air): 48%
-            if (world_map[y][x] == TILE_STONE && (rand_next() % 100) < 48) {
+            int chance = base_chance;
+            if ((x % 64) < 20) chance += 10; // "Dense" columns
+            if ((x % 64) > 44) chance -= 10; // "Sparse" columns
+
+            if (world_map[y][x] == TILE_STONE && (rand_next() % 100) < chance) {
                 world_map[y][x] = TILE_AIR;
             }
         }
     }
     
     // Pass 2/3: Cellular Automata smoothing
-    unsigned char temp[10]; // only need temp buffer per column to not mess up reads, but 
-    // actually doing it perfectly requires a full temp map. To save RAM, we can just do in-place
-    // which creates directional artifacts, or use a small rolling buffer.
-    // Rolling buffer approach:
     unsigned char row_above[WORLD_W];
     unsigned char row_cur[WORLD_W];
     
     for (int pass = 0; pass < 3; pass++) {
-        // Init buffers
-        for (int x=0; x<WORLD_W; x++) row_above[x] = world_map[30-1][x];
-        for (int x=0; x<WORLD_W; x++) row_cur[x] = world_map[30][x];
+        for (int x = 0; x < WORLD_W; x++) row_above[x] = world_map[44][x];
+        for (int x = 0; x < WORLD_W; x++) row_cur[x] = world_map[45][x];
         
-        for (int y = 30; y < WORLD_H - 2; y++) {
+        for (int y = 45; y < WORLD_H - 2; y++) {
             unsigned char row_next[WORLD_W];
-            for (int x=0; x<WORLD_W; x++) row_next[x] = world_map[y+1][x];
+            for (int x = 0; x < WORLD_W; x++) row_next[x] = world_map[y+1][x];
             
             for (int x = 1; x < WORLD_W - 1; x++) {
-                // Count wall neighbors in 3x3
                 int walls = 0;
                 if (row_above[x-1] != TILE_AIR) walls++;
                 if (row_above[x] != TILE_AIR) walls++;
@@ -71,36 +68,53 @@ static void generate_caves() {
                 if (row_next[x] != TILE_AIR) walls++;
                 if (row_next[x+1] != TILE_AIR) walls++;
                 
-                if (walls >= 4) {
-                    world_map[y][x] = TILE_STONE; // Fill
+                // Varied threshold for pass 3 creates more "cragginess"
+                int threshold = (pass == 2) ? (4 + (rand_next() % 2)) : 4;
+
+                if (walls >= threshold) {
+                    if (y >= 111) world_map[y][x] = TILE_ASH;
+                    else world_map[y][x] = TILE_STONE;
                 } else {
-                    world_map[y][x] = TILE_AIR;   // Empty
+                    world_map[y][x] = TILE_AIR;
                 }
             }
-            // shift down
-            for (int x=0; x<WORLD_W; x++) row_above[x] = row_cur[x];
-            for (int x=0; x<WORLD_W; x++) row_cur[x] = world_map[y][x];
+            for (int x = 0; x < WORLD_W; x++) row_above[x] = row_cur[x];
+            for (int x = 0; x < WORLD_W; x++) row_cur[x] = world_map[y][x];
+        }
     }
-}
 }
 
 static void generate_worms() {
-    int num_worms = 12 + (rand_next() % 8);
+    int num_worms = 15 + (rand_next() % 10);
     for (int w = 0; w < num_worms; w++) {
         int cur_x = 10 + (rand_next() % (WORLD_W - 20));
-        int cur_y = 30 + (rand_next() % (WORLD_H - 50));
-        int len = 40 + (rand_next() % 60);
+        int cur_y = 35 + (rand_next() % (WORLD_H - 60));
+        int type = rand_next() % 3; // 0=classic, 1=fat/room, 2=vertical
+        
+        int len = 30 + (rand_next() % 50);
+        int w_size = (type == 1) ? 3 : 2;
+        
         for (int i = 0; i < len; i++) {
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = 0; dx < 2; dx++) {
+            // Carve the segment
+            for (int dy = 0; dy < w_size; dy++) {
+                for (int dx = 0; dx < w_size; dx++) {
                     int nx = cur_x + dx; int ny = cur_y + dy;
                     if (nx >= 2 && nx < WORLD_W - 2 && ny >= 2 && ny < WORLD_H - 2)
                         world_map[ny][nx] = TILE_AIR;
                 }
             }
-            cur_x += (rand_next() % 3) - 1; cur_y += (rand_next() % 3) - 1;
-            if ((rand_next() % 10) < 3) cur_y++;
-            if (cur_x < 5) cur_x = 5; if (cur_x > WORLD_W - 5) cur_x = WORLD_W - 5;
+            
+            // Movement logic
+            if (type == 2) { // Vertical heavy
+                if ((rand_next() % 100) < 20) cur_x += (rand_next() % 3) - 1;
+                cur_y += 1;
+            } else { // Classic and Fat
+                cur_x += (rand_next() % 3) - 1;
+                cur_y += (rand_next() % 3) - 1;
+                if ((rand_next() % 10) < 2) cur_y++; // slight downward bias
+            }
+            
+            if (cur_x < 5 || cur_x > WORLD_W-5 || cur_y > WORLD_H-5) break;
         }
     }
 }
@@ -121,24 +135,60 @@ static void generate_foliage() {
 static void generate_cave_entrances(int* heights) {
     int num_entrances = 1 + (rand_next() % 2); // 1 to 2 entrances
     for (int e = 0; e < num_entrances; e++) {
-        int cx = 30 + (rand_next() % (WORLD_W - 60));
+        int cx = 20 + (rand_next() % (WORLD_W - 40));
         int cy = heights[cx];
         
-        // Diagonal snaking path
-        int x_dir = ((rand_next() % 100) < 50) ? -1 : 1;
-        for (int y = cy; y < 45; y++) {
-            if ((rand_next() % 100) < 20) x_dir = (rand_next() % 3) - 1; // drift
-            cx += x_dir;
-            
-            // Carve a 4x2 pocket
-            for (int dy = 0; dy < 2; dy++) {
-                for (int dx = -2; dx <= 2; dx++) {
-                    int nx = cx + dx;
-                    int ny = y + dy;
-                    if (nx >= 2 && nx < WORLD_W - 2 && ny >= 0 && ny < WORLD_H) {
-                        world_map[ny][nx] = TILE_AIR;
+        int type = rand_next() % 3; // 0=Tunnel, 1=Shaft, 2=Wide Mouth
+        int depth = 15 + (rand_next() % 25);
+        int width = 2 + (rand_next() % 2);
+        
+        if (type == 0) { // Sloped Tunnel
+            int x_dir = ((rand_next() % 100) < 50) ? -1 : 1;
+            for (int y = cy; y < cy + depth; y++) {
+                if ((rand_next() % 100) < 30) x_dir = (rand_next() % 3) - 1;
+                cx += x_dir;
+                
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = -width; dx <= width; dx++) {
+                        int nx = cx + dx, ny = y + dy;
+                        if (nx >= 2 && nx < WORLD_W - 2 && ny >= 0 && ny < WORLD_H)
+                            world_map[ny][nx] = TILE_AIR;
                     }
                 }
+            }
+        } else if (type == 1) { // Vertical Shaft
+            int start_width = 1 + (rand_next() % 2);
+            for (int y = cy; y < cy + depth + 10; y++) {
+                if ((rand_next() % 100) < 15) cx += (rand_next() % 3) - 1; // minor drift
+                for (int dx = -start_width; dx <= start_width; dx++) {
+                    int nx = cx + dx;
+                    if (nx >= 2 && nx < WORLD_W - 2 && y >= 0 && y < WORLD_H)
+                        world_map[y][nx] = TILE_AIR;
+                }
+            }
+        } else { // Wide Mouth / Cavern
+            int mouth_w = 4 + (rand_next() % 4);
+            int mouth_h = 3 + (rand_next() % 3);
+            for (int y = cy - 2; y < cy + mouth_h; y++) {
+                int cur_w = mouth_w - (abs(y - cy));
+                if (cur_w < 1) cur_w = 1;
+                for (int dx = -cur_w; dx <= cur_w; dx++) {
+                    int nx = cx + dx;
+                    if (nx >= 2 && nx < WORLD_W - 2 && y >= 0 && y < WORLD_H)
+                        world_map[y][nx] = TILE_AIR;
+                }
+            }
+            // Add a small worm at the bottom of the mouth
+            int cur_x = cx;
+            int cur_y = cy + mouth_h;
+            for(int i=0; i<20; i++) {
+                for(int dy=-1; dy<=1; dy++) {
+                    for(int dx=-1; dx<=1; dx++) {
+                        int nx = cur_x+dx, ny = cur_y+dy;
+                        if(nx>=2 && nx<WORLD_W-2 && ny>=2 && ny<WORLD_H-2) world_map[ny][nx] = TILE_AIR;
+                    }
+                }
+                cur_x += (rand_next()%3)-1; cur_y += (rand_next()%2);
             }
         }
     }
@@ -168,7 +218,7 @@ static void generate_trees(int* heights) {
                     if ((rand_next() % 100) < 25) { // 25% chance of branch at this height
                         int side = (rand_next() % 100) < 50 ? -1 : 1; // -1=Left, 1=Right
                         int style = rand_next() % 3;
-                        int branch_base = 87 + (style * 8) + (side == 1 ? 4 : 0);
+                        int branch_base = 91 + (style * 8) + (side == 1 ? 4 : 0);
                         
                         int start_bx = (side == -1) ? (x - 2) : (x + 1);
                         int start_by = y - 1 - ty - 1; // 2x2 tiles, anchor so branch looks like it's coming from trunk
@@ -190,7 +240,7 @@ static void generate_trees(int* heights) {
                 // Leaves (5x5 Canopy from Tiles 9 onwards)
                 // Tree Tops: 0 (tiles 12-36), 1 (tiles 37-61), 2 (tiles 62-86)
                 int tree_type = rand_next() % 3;
-                int base_tile = 12 + (tree_type * 25);
+                int base_tile = 16 + (tree_type * 25);
                 
                 // Canopy overlaps the top 2 trunk blocks
                 // Tree top block is at `y - height`
@@ -238,7 +288,7 @@ static void spawn_ore_vein(int x, int y, unsigned char ore_type, int size) {
 }
 
 static void generate_ores() {
-    for (int y = 31; y < WORLD_H; y++) {
+    for (int y = 45; y < WORLD_H; y++) {
         for (int x = 0; x < WORLD_W; x++) {
             if (world_map[y][x] == TILE_STONE || world_map[y][x] == TILE_ASH) {
                 int p = rand_next() % 1000;
@@ -279,30 +329,33 @@ void generate_world(void) {
     smooth_heightmap(heights);
     smooth_heightmap(heights);
 
+    smooth_heightmap(heights);
+    smooth_heightmap(heights);
+
     // 2. Fill layers
     for (int x = 0; x < WORLD_W; x++) {
         int surface = heights[x];
+        // Stone starts between 3 and 7 blocks below the surface
+        int stone_start = surface + 3 + (rand_next() % 5); 
+        
         for (int y = 0; y < WORLD_H; y++) {
-            if (y <= 30) { // Layer 1: Space/Surface
-                if (y < surface) {
-                    world_map[y][x] = TILE_AIR;
-                } else if (y == surface) {
-                    world_map[y][x] = TILE_GRASS;
+            if (y < surface) {
+                world_map[y][x] = TILE_AIR;
+            } else if (y == surface) {
+                world_map[y][x] = TILE_GRASS;
+            } else if (y < stone_start) {
+                world_map[y][x] = TILE_DIRT;
+            } else if (y <= 110) { // Stone layer (Caverns)
+                // Gradually transition from Dirt to Stone just after the stone_start
+                if (y == stone_start) {
+                    // Small chance for a few dirt pockets early in the stone
+                    if ((rand_next() % 100) < 20) world_map[y][x] = TILE_DIRT;
+                    else world_map[y][x] = TILE_STONE;
                 } else {
-                    world_map[y][x] = TILE_DIRT;
-                }
-            } else if (y <= 70) { // Layer 2: Underground
-                // Gradually transition from Dirt to Stone
-                int stone_chance = (y - 30) * 2; // Linear increase
-                if ((rand_next() % 100) < stone_chance) {
                     world_map[y][x] = TILE_STONE;
-                } else {
-                    world_map[y][x] = TILE_DIRT;
                 }
-            } else if (y <= 110) { // Layer 3: Caverns
-                world_map[y][x] = TILE_STONE;
             } else { // Layer 4: Underworld (111-127)
-                // Bottom of the world is Ash
+                // Jagged transition to Underworld starts around 107 (already handled in CA but good for initial fill)
                 world_map[y][x] = TILE_ASH;
             }
         }
@@ -313,28 +366,7 @@ void generate_world(void) {
         world_map[WORLD_H - 1][x] = TILE_STONE; 
     }
 
-    // 4. Underworld Cavern (Jagged Air Strip 115-122)
-    int cave_y = 115;
-    int cave_h = 5;
-    for (int x = 0; x < WORLD_W; x++) {
-        // Shift the cave position and height slightly for jaggedness
-        if ((rand_next() % 100) < 40) cave_y += (rand_next() % 3) - 1;
-        if ((rand_next() % 100) < 40) cave_h += (rand_next() % 3) - 1;
-        
-        // Clamp values to keep it within the band (112 - 125)
-        if (cave_y < 112) cave_y = 112;
-        if (cave_y > 118) cave_y = 118;
-        if (cave_h < 4) cave_h = 4;
-        if (cave_h > 8) cave_h = 8;
-
-        for (int y = cave_y; y < cave_y + cave_h; y++) {
-            if (y < WORLD_H - 1) { // Don't break bedrock
-                world_map[y][x] = TILE_AIR;
-            }
-        }
-    }
-
-    // 5. Caves (targeting Underground and Caverns)
+    // 4. Caves (targeting Underground and Caverns)
     generate_caves();
     generate_worms(); 
     generate_cave_entrances(heights);
@@ -344,17 +376,30 @@ void generate_world(void) {
     generate_trees(heights);
     generate_foliage();
     
-    // 7. Underworld Detail (Lava pockets and pools)
+    // 7. Underworld Cavern (Jagged Air Strip 112-125)
+    // We do this AFTER caves/smoothing so it doesn't get filled back in
+    int cave_y = 118; // Center of the 112-125 band
+    int cave_h = 4;   // Target average height
     for (int x = 0; x < WORLD_W; x++) {
-        // Add lava pools at the very bottom of the air cavern
-        for (int y = 120; y < WORLD_H - 1; y++) {
-            if (world_map[y][x] == TILE_AIR && (rand_next() % 100) < 20) {
-                world_map[y][x] = TILE_LAVA;
-            }
-            // Occasional lava pockets in the ash
-            if (world_map[y][x] == TILE_ASH && (rand_next() % 100) < 5) {
-                world_map[y][x] = TILE_LAVA;
+        // Shift the cave position and height slightly for jaggedness
+        if ((rand_next() % 100) < 40) cave_y += (rand_next() % 3) - 1;
+        if ((rand_next() % 100) < 30) cave_h += (rand_next() % 3) - 1;
+        
+        // Clamp height to keep it around 4
+        if (cave_h < 3) cave_h = 3;
+        if (cave_h > 6) cave_h = 6;
+
+        // Clamp values to keep it within the band (112 - 125)
+        if (cave_y < 112) cave_y = 112;
+        if (cave_y + cave_h > 126) cave_y = 126 - cave_h;
+
+        for (int y = cave_y; y < cave_y + cave_h; y++) {
+            if (y < WORLD_H - 1) { // Don't break bedrock
+                world_map[y][x] = TILE_AIR;
             }
         }
     }
+
+    // 8. Underworld Detail (Post-processing)
+    // Removed lava generation as requested
 }
