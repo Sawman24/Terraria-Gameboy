@@ -15,7 +15,9 @@
 #define TILE_IRON   7
 #define TILE_PLANKS 8
 #define TILE_TORCH  9
+#define TILE_ASH    10
 #define TILE_GRASS_PLANTS 11
+#define TILE_LAVA   12
 #define ITEM_GEL    102
 #define ITEM_TORCH  103
 

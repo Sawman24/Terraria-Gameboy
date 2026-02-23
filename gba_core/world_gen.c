@@ -238,15 +238,25 @@ static void spawn_ore_vein(int x, int y, unsigned char ore_type, int size) {
 }
 
 static void generate_ores() {
-    for (int y = 40; y < WORLD_H; y++) {
+    for (int y = 31; y < WORLD_H; y++) {
         for (int x = 0; x < WORLD_W; x++) {
-            if (world_map[y][x] == TILE_STONE) {
+            if (world_map[y][x] == TILE_STONE || world_map[y][x] == TILE_ASH) {
                 int p = rand_next() % 1000;
-                // Much lower chance to spawn, but spawns a multi-block cluster
-                if (p < 3) { // 0.3% copper vein
-                    spawn_ore_vein(x, y, TILE_COPPER, 4 + (rand_next() % 8)); // 4 to 11 blocks
-                } else if (p < 6 && y > 60) { // 0.3% iron vein deeper down
-                    spawn_ore_vein(x, y, TILE_IRON, 4 + (rand_next() % 8));
+                
+                // Underground Ores (31-70)
+                if (y <= 70) {
+                    if (p < 5) spawn_ore_vein(x, y, TILE_COPPER, 4 + (rand_next() % 6));
+                    else if (p < 8) spawn_ore_vein(x, y, TILE_IRON, 3 + (rand_next() % 5));
+                } 
+                // Cavern Ores (71-110)
+                else if (y <= 110) {
+                    if (p < 6) spawn_ore_vein(x, y, TILE_IRON, 5 + (rand_next() % 8));
+                    // Add more rare ores here if desired
+                }
+                // Underworld Ores (111-127)
+                else {
+                    // Placeholder for Hellstone (maybe reusing Copper or Iron ID for now)
+                    if (p < 10) spawn_ore_vein(x, y, TILE_IRON, 6 + (rand_next() % 10));
                 }
             }
         }
@@ -254,21 +264,18 @@ static void generate_ores() {
 }
 
 void generate_world(void) {
-    // 1. Generate surface heightmap using a simple random walk
+    // 1. Generate surface heightmap (target 0-30 range)
     int heights[WORLD_W];
-    int current_y = 20; // Starting elevation of surface
+    int current_y = 25; // Average start depth
     for (int x = 0; x < WORLD_W; x++) {
         heights[x] = current_y;
-        // Randomly go up/down occasionally
-        if ((rand_next() % 100) < 30) {
+        if ((rand_next() % 100) < 35) {
             current_y += (rand_next() % 3) - 1;
         }
-        if (current_y < 10) current_y = 10;
-        if (current_y > 40) current_y = 40;
+        if (current_y < 15) current_y = 15;   // Hills never above tile 15
+        if (current_y > 30) current_y = 30;   //Valleys never below tile 30
     }
     
-    // Smooth it out
-    smooth_heightmap(heights);
     smooth_heightmap(heights);
     smooth_heightmap(heights);
 
@@ -276,35 +283,78 @@ void generate_world(void) {
     for (int x = 0; x < WORLD_W; x++) {
         int surface = heights[x];
         for (int y = 0; y < WORLD_H; y++) {
-            if (y < surface) {
-                world_map[y][x] = TILE_AIR;
-            } else if (y == surface) {
-                world_map[y][x] = TILE_GRASS;
-            } else if (y < surface + (8 + rand_next()%4)) {
-                world_map[y][x] = TILE_DIRT;
-            } else {
+            if (y <= 30) { // Layer 1: Space/Surface
+                if (y < surface) {
+                    world_map[y][x] = TILE_AIR;
+                } else if (y == surface) {
+                    world_map[y][x] = TILE_GRASS;
+                } else {
+                    world_map[y][x] = TILE_DIRT;
+                }
+            } else if (y <= 70) { // Layer 2: Underground
+                // Gradually transition from Dirt to Stone
+                int stone_chance = (y - 30) * 2; // Linear increase
+                if ((rand_next() % 100) < stone_chance) {
+                    world_map[y][x] = TILE_STONE;
+                } else {
+                    world_map[y][x] = TILE_DIRT;
+                }
+            } else if (y <= 110) { // Layer 3: Caverns
                 world_map[y][x] = TILE_STONE;
+            } else { // Layer 4: Underworld (111-127)
+                // Bottom of the world is Ash
+                world_map[y][x] = TILE_ASH;
             }
         }
     }
 
-    // 3. Make the bottom Bedrock
+    // 3. Bedrock
     for (int x = 0; x < WORLD_W; x++) {
-        world_map[WORLD_H - 1][x] = TILE_STONE; // Just block it off or add Bedrock tile
-        world_map[WORLD_H - 2][x] = TILE_STONE;
+        world_map[WORLD_H - 1][x] = TILE_STONE; 
     }
 
-    // 4. Caves
+    // 4. Underworld Cavern (Jagged Air Strip 115-122)
+    int cave_y = 115;
+    int cave_h = 5;
+    for (int x = 0; x < WORLD_W; x++) {
+        // Shift the cave position and height slightly for jaggedness
+        if ((rand_next() % 100) < 40) cave_y += (rand_next() % 3) - 1;
+        if ((rand_next() % 100) < 40) cave_h += (rand_next() % 3) - 1;
+        
+        // Clamp values to keep it within the band (112 - 125)
+        if (cave_y < 112) cave_y = 112;
+        if (cave_y > 118) cave_y = 118;
+        if (cave_h < 4) cave_h = 4;
+        if (cave_h > 8) cave_h = 8;
+
+        for (int y = cave_y; y < cave_y + cave_h; y++) {
+            if (y < WORLD_H - 1) { // Don't break bedrock
+                world_map[y][x] = TILE_AIR;
+            }
+        }
+    }
+
+    // 5. Caves (targeting Underground and Caverns)
     generate_caves();
-    generate_worms(); // Add long tunnels
+    generate_worms(); 
     generate_cave_entrances(heights);
     
-    // 5. Ores
+    // 6. Features
     generate_ores();
-
-    // 6. Trees
     generate_trees(heights);
-    
-    // 7. Foliage (Plants)
     generate_foliage();
+    
+    // 7. Underworld Detail (Lava pockets and pools)
+    for (int x = 0; x < WORLD_W; x++) {
+        // Add lava pools at the very bottom of the air cavern
+        for (int y = 120; y < WORLD_H - 1; y++) {
+            if (world_map[y][x] == TILE_AIR && (rand_next() % 100) < 20) {
+                world_map[y][x] = TILE_LAVA;
+            }
+            // Occasional lava pockets in the ash
+            if (world_map[y][x] == TILE_ASH && (rand_next() % 100) < 5) {
+                world_map[y][x] = TILE_LAVA;
+            }
+        }
+    }
 }
