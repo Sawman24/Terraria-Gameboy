@@ -21,6 +21,9 @@
 #define TILE_FURNACE 13
 #define TILE_WORKBENCH 14
 #define TILE_CHEST 15
+#define TILE_MUD   16
+#define TILE_JUNGLE_GRASS 17
+#define TILE_SAPLING 20
 #define ITEM_GEL    102
 #define ITEM_TORCH  103
 #define ITEM_COPPER_ORE 104
@@ -30,6 +33,8 @@
 #define ITEM_WORKBENCH 108
 #define ITEM_FURNACE 109
 #define ITEM_CHEST 110
+#define ITEM_AXE     10
+#define ITEM_ACORN   27
 
 // The world map array, sits in EWRAM (256KB)
 extern unsigned char world_map[WORLD_H][WORLD_W];
@@ -40,5 +45,6 @@ extern unsigned int seed;
 
 // Functions
 void generate_world(void);
+void grow_tree(int x, int y);
 
 #endif

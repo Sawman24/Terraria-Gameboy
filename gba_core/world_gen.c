@@ -194,6 +194,68 @@ static void generate_cave_entrances(int* heights) {
     }
 }
 
+// Grow a mature tree at (x,y) where (x,y) is ground level (the block replaced is y-1)
+void grow_tree(int x, int y) {
+    if (x < 3 || x >= WORLD_W - 3 || y < 15 || y >= WORLD_H) return;
+
+    int height = 5 + (rand_next() % 8); // 5 to 12 tiles tall
+    
+    // Check if space above is clear (up to height + canopy overhead)
+    for (int ty = 1; ty < height + 5; ty++) {
+        if (y - ty < 0) return;
+        if (world_map[y - ty][x] != TILE_AIR && world_map[y - ty][x] != TILE_SAPLING) return;
+    }
+
+    // Trunk
+    for (int ty = 0; ty < height; ty++) {
+        world_map[y - 1 - ty][x] = TILE_WOOD;
+    }
+    
+    // Branches
+    for (int ty = 1; ty < height - 3; ty++) {
+        if ((rand_next() % 100) < 25) { // 25% chance of branch at this height
+            int side = (rand_next() % 100) < 50 ? -1 : 1; 
+            int style = rand_next() % 3;
+            int branch_base = 96 + (style * 8) + (side == 1 ? 4 : 0);
+            
+            int start_bx = (side == -1) ? (x - 2) : (x + 1);
+            int start_by = y - 1 - ty - 1; 
+            
+            for (int bcy = 0; bcy < 2; bcy++) {
+                for (int bcx = 0; bcx < 2; bcx++) {
+                    int map_bx = start_bx + bcx;
+                    int map_by = start_by + bcy;
+                    if (map_bx >= 0 && map_bx < WORLD_W && map_by >= 0 && map_by < WORLD_H) {
+                        if (world_map[map_by][map_bx] == TILE_AIR) {
+                            world_map[map_by][map_bx] = branch_base + (bcy * 2) + bcx;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Leaves (5x5 Canopy)
+    int tree_type = rand_next() % 3;
+    int base_tile = 21 + (tree_type * 25);
+    int trunk_top_y = y - height;
+    int start_x = x - 2;
+    int start_y = trunk_top_y - 3; 
+    
+    for (int cy = 0; cy < 5; cy++) {
+        for (int cx = 0; cx < 5; cx++) {
+            int map_x = start_x + cx;
+            int map_y = start_y + cy;
+            int tile_index = base_tile + (cy * 5) + cx;
+            if (map_x >= 0 && map_x < WORLD_W && map_y >= 0 && map_y < WORLD_H) {
+                if (world_map[map_y][map_x] == TILE_AIR || world_map[map_y][map_x] == TILE_WOOD) {
+                    world_map[map_y][map_x] = tile_index;
+                }
+            }
+        }
+    }
+}
+
 // Generate simple trees on surface
 static void generate_trees(int* heights) {
     for (int x = 3; x < WORLD_W - 3; x++) {
@@ -204,68 +266,7 @@ static void generate_trees(int* heights) {
             
             // 15% chance to place tree
             if ((rand_next() % 100) < 15) {
-                int height = 5 + (rand_next() % 8); // 5 to 12 tiles tall
-                // Trunk
-                for (int ty = 0; ty < height; ty++) {
-                    world_map[y - 1 - ty][x] = TILE_WOOD;
-                }
-                
-                // Branches (Tiles 84-107)
-                // Style 0: L=84, R=88. Style 1: L=92, R=96. Style 2: L=100, R=104.
-                // Each is 2x2 tiles. 
-                // We'll place branches between ground (ty=1) and below canopy top (ty < height-3)
-                for (int ty = 1; ty < height - 3; ty++) {
-                    if ((rand_next() % 100) < 25) { // 25% chance of branch at this height
-                        int side = (rand_next() % 100) < 50 ? -1 : 1; // -1=Left, 1=Right
-                        int style = rand_next() % 3;
-                        int branch_base = 91 + (style * 8) + (side == 1 ? 4 : 0);
-                        
-                        int start_bx = (side == -1) ? (x - 2) : (x + 1);
-                        int start_by = y - 1 - ty - 1; // 2x2 tiles, anchor so branch looks like it's coming from trunk
-                        
-                        for (int bcy = 0; bcy < 2; bcy++) {
-                            for (int bcx = 0; bcx < 2; bcx++) {
-                                int map_bx = start_bx + bcx;
-                                int map_by = start_by + bcy;
-                                if (map_bx >= 0 && map_bx < WORLD_W && map_by >= 0 && map_by < WORLD_H) {
-                                    if (world_map[map_by][map_bx] == TILE_AIR) {
-                                        world_map[map_by][map_bx] = branch_base + (bcy * 2) + bcx;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Leaves (5x5 Canopy from Tiles 9 onwards)
-                // Tree Tops: 0 (tiles 12-36), 1 (tiles 37-61), 2 (tiles 62-86)
-                int tree_type = rand_next() % 3;
-                int base_tile = 16 + (tree_type * 25);
-                
-                // Canopy overlaps the top 2 trunk blocks
-                // Tree top block is at `y - height`
-                int trunk_top_y = y - height;
-                
-                // Canopy center X = 2 (out of 5 width)
-                // Canopy center/bottom overlap Y = 3 (out of 5 height)
-                int start_x = x - 2;
-                int start_y = trunk_top_y - 3; // Center the canopy on the topmost trunk block
-                
-                for (int cy = 0; cy < 5; cy++) {
-                    for (int cx = 0; cx < 5; cx++) {
-                        int map_x = start_x + cx;
-                        int map_y = start_y + cy;
-                        int tile_index = base_tile + (cy * 5) + cx;
-                        
-                        if (map_x >= 0 && map_x < WORLD_W && map_y >= 0 && map_y < WORLD_H) {
-                            // Only place canopy if we're placing over AIR, or replacing the trunk top.
-                            if (world_map[map_y][map_x] == TILE_AIR || world_map[map_y][map_x] == TILE_WOOD) {
-                                world_map[map_y][map_x] = tile_index;
-                            }
-                        }
-                    }
-                }
-                
+                grow_tree(x, y);
                 // Skip ahead to not overlap trees too closely
                 x += 4 + (rand_next() % 3);
             }

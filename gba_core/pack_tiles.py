@@ -25,10 +25,15 @@ TILE_DEFS = [
     ("Furnace", r"Tiles\Tiles_17.png", 8, 0),    # 13
     ("Workbench", r"Tiles\Tiles_18.png", 1, 0),  # 14
     ("Chest", r"Tiles\Tiles_21.png", 8, 0),      # 15
+    ("Mud", r"Tiles\Tiles_59.png", 9, 9),        # 16
+    ("JungleGrass", r"Tiles\Tiles_60.png", 9, 0),   # 17
+    ("Empty18", None, 0, 0),                      # 18
+    ("Empty19", None, 0, 0),                      # 19
+    ("Sapling", r"Tiles\Tiles_20.png", 0, 0),    # 20
 ]
 
-IN_DIR = r"c:\Users\sawye\Desktop\Terraria GBA\GBA_Assets"
-OUT_HEADER = r"c:\Users\sawye\Desktop\Terraria GBA\gba_core\tileset.h"
+IN_DIR = r"c:\Users\sawye\Desktop\Game Dev\Terraria-Gameboy\GBA_Assets"
+OUT_HEADER = r"c:\Users\sawye\Desktop\Game Dev\Terraria-Gameboy\gba_core\tileset.h"
 
 # 1. Collect all unique colors across these tiles for an 8bpp (256-color) palette
 colors = [(132, 170, 248)] # Index 0 = Sky Blue (transparent in our tiles)
