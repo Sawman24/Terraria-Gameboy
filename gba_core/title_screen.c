@@ -2,20 +2,9 @@
 // Terraria GBA - Title Screen
 // Static logo + splash text + blinking Press START + music
 // ============================================================
-#include "game_data.h"
+#include "audio.h"
 #include "theme_data.h"
-
-// PSG Sound registers
-#define REG_SOUNDCNT_L  (*(volatile uint16_t*)0x04000080)
-#define REG_SOUNDCNT_H  (*(volatile uint16_t*)0x04000082)
-#define REG_SOUNDCNT_X  (*(volatile uint16_t*)0x04000084)
-// Channel 1 (Square + Sweep)
-#define REG_SOUND1CNT_L (*(volatile uint16_t*)0x04000060)
-#define REG_SOUND1CNT_H (*(volatile uint16_t*)0x04000062)
-#define REG_SOUND1CNT_X (*(volatile uint16_t*)0x04000064)
-// Channel 2 (Square)
-#define REG_SOUND2CNT_L (*(volatile uint16_t*)0x04000068)
-#define REG_SOUND2CNT_H (*(volatile uint16_t*)0x0400006C)
+#include "game_data.h"
 
 #define TITLE_MODE_3     0x0003
 #define TITLE_BG2_ENABLE 0x0400
@@ -232,85 +221,6 @@ static int seq_frame;        // total frame counter for the song
 static int ch1_dur;          // remaining frames for ch1 note
 static int ch2_dur;          // remaining frames for ch2 note
 
-static void psg_init(void) {
-    // Enable master sound
-    REG_SOUNDCNT_X = 0x0080;
-    // PSG channels at full volume to both L+R
-    REG_SOUNDCNT_L = 0xFF77;  // L/R vol max, all channels to both outputs
-    REG_SOUNDCNT_H = 0x0002;  // PSG ratio = full
-    // Channel 1: no sweep
-    REG_SOUND1CNT_L = 0x0000;
-    // Channel 2: silent initially
-    REG_SOUND2CNT_L = 0x0000;
-    // Reset sequencer
-    seq_index = 0;
-    seq_wait = 0;
-    seq_frame = 0;
-    ch1_dur = 0;
-    ch2_dur = 0;
-}
-
-static void psg_play_note(int channel, int freq_reg, int volume, int duty) {
-    // duty: 0=12.5%, 1=25%, 2=50%, 3=75%
-    // volume: 0-15
-    // freq_reg: 0-2047
-    unsigned short env = (volume << 12) | 0x0000; // no sweep, instant vol
-    unsigned short duty_val = (duty << 6);
-    unsigned short freq = freq_reg | 0x8000; // bit 15 = restart
-    
-    if (channel == 0) {
-        REG_SOUND1CNT_H = duty_val | env;
-        REG_SOUND1CNT_X = freq;
-    } else {
-        REG_SOUND2CNT_L = duty_val | env;
-        REG_SOUND2CNT_H = freq;
-    }
-}
-
-static void psg_stop_channel(int channel) {
-    if (channel == 0) {
-        REG_SOUND1CNT_H = 0x0000;  // volume 0
-        REG_SOUND1CNT_X = 0x8000;  // restart with 0 vol
-    } else {
-        REG_SOUND2CNT_L = 0x0000;
-        REG_SOUND2CNT_H = 0x8000;
-    }
-}
-
-static void psg_update(void) {
-    seq_frame++;
-    
-    // Process any events due this frame
-    while (seq_index < THEME_NUM_EVENTS) {
-        if (seq_wait > 0) {
-            seq_wait--;
-            break;
-        }
-        // Fire this event
-        const NoteEvent* e = &theme_notes[seq_index];
-        int ch = e->channel;
-        psg_play_note(ch, e->freq, e->volume, 1); // duty=25%
-        if (ch == 0) ch1_dur = e->duration;
-        else         ch2_dur = e->duration;
-        
-        seq_index++;
-        // Load wait for next event
-        if (seq_index < THEME_NUM_EVENTS)
-            seq_wait = theme_notes[seq_index].wait;
-    }
-    
-    // Count down note durations, stop when done
-    if (ch1_dur > 0) { ch1_dur--; if (ch1_dur == 0) psg_stop_channel(0); }
-    if (ch2_dur > 0) { ch2_dur--; if (ch2_dur == 0) psg_stop_channel(1); }
-    
-    // Loop the song
-    if (seq_index >= THEME_NUM_EVENTS && ch1_dur == 0 && ch2_dur == 0) {
-        seq_index = 0;
-        seq_wait = theme_notes[0].wait;
-        seq_frame = 0;
-    }
-}
-
 void run_title_screen(void) {
     REG_DISPCNT = TITLE_MODE_3 | TITLE_BG2_ENABLE;
     
@@ -320,8 +230,8 @@ void run_title_screen(void) {
     REG_DMA3CNT = (TITLE_SCREEN_W * TITLE_SCREEN_H) | DMA_ENABLE;
     
     // --- Start playing theme music (PSG) ---
-    psg_init();
-    seq_wait = theme_notes[0].wait;
+    audio_init();
+    audio_play_song(theme_notes, THEME_NUM_EVENTS);
     
     // --- 2. Draw logo (static, moved up) ---
     int logo_x = (TITLE_SCREEN_W - 192) / 2;  // center 192px wide
@@ -364,18 +274,18 @@ void run_title_screen(void) {
         seed += 13;
         
         // Update music sequencer
-        psg_update();
+        audio_update();
         
         // Stop title screen logic when user presses START
         if (~REG_KEYINPUT & KEY_START) {
-            // Wait for key release to prevent skipping right into the game instantly (optional but nice)
+            // Wait for key release...
             while (~REG_KEYINPUT & KEY_START) {
+                audio_update(); // Keep music playing while waiting? 
                 title_vsync();
             }
             
             // Stop sound
-            psg_stop_channel(0);
-            psg_stop_channel(1);
+            audio_stop();
             
             // Clear screen
             for (int i=0; i<TITLE_SCREEN_W * TITLE_SCREEN_H; i++) {

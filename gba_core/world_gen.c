@@ -216,7 +216,7 @@ void grow_tree(int x, int y) {
         if ((rand_next() % 100) < 25) { // 25% chance of branch at this height
             int side = (rand_next() % 100) < 50 ? -1 : 1; 
             int style = rand_next() % 3;
-            int branch_base = 96 + (style * 8) + (side == 1 ? 4 : 0);
+            int branch_base = 103 + (style * 8) + (side == 1 ? 4 : 0);
             
             int start_bx = (side == -1) ? (x - 2) : (x + 1);
             int start_by = y - 1 - ty - 1; 
@@ -237,7 +237,7 @@ void grow_tree(int x, int y) {
     
     // Leaves (5x5 Canopy)
     int tree_type = rand_next() % 3;
-    int base_tile = 21 + (tree_type * 25);
+    int base_tile = 28 + (tree_type * 25);
     int trunk_top_y = y - height;
     int start_x = x - 2;
     int start_y = trunk_top_y - 3; 
@@ -285,6 +285,35 @@ static void spawn_ore_vein(int x, int y, unsigned char ore_type, int size) {
         else if (r == 1) x--;
         else if (r == 2) y++;
         else y--;
+    }
+}
+
+static void generate_chests() {
+    int chests_spawned = 0;
+    int target_chests = 4 + (rand_next() % 3); // 4 to 6
+    int attempts = 0;
+    while (chests_spawned < target_chests && attempts < 1000) {
+        attempts++;
+        int rx = 10 + (rand_next() % (WORLD_W - 20));
+        int ry = 45 + (rand_next() % (WORLD_H - 10)); // Underground & Caverns
+        
+        // Find ground
+        while (ry < WORLD_H - 3 && world_map[ry][rx] == TILE_AIR) ry++;
+        
+        // Spot must be air, and ground must be solid
+        ry--; // ry is now the last air block
+        if (ry > 45 && rx < WORLD_W - 2 &&
+            world_map[ry][rx] == TILE_AIR && world_map[ry][rx+1] == TILE_AIR &&
+            world_map[ry-1][rx] == TILE_AIR && world_map[ry-1][rx+1] == TILE_AIR &&
+            world_map[ry+1][rx] != TILE_AIR && world_map[ry+1][rx+1] != TILE_AIR) {
+            
+            // Place 2x2 chest: TL=TILE_CHEST, TR=TILE_CHEST_TR, BL=TILE_CHEST_BL, BR=TILE_CHEST_BR
+            world_map[ry-1][rx] = TILE_CHEST;
+            world_map[ry-1][rx+1] = TILE_CHEST_TR;
+            world_map[ry][rx] = TILE_CHEST_BL;
+            world_map[ry][rx+1] = TILE_CHEST_BR;
+            chests_spawned++;
+        }
     }
 }
 
@@ -371,6 +400,7 @@ void generate_world(void) {
     generate_caves();
     generate_worms(); 
     generate_cave_entrances(heights);
+    generate_chests();
     
     // 6. Features
     generate_ores();

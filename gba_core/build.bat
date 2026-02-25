@@ -8,11 +8,13 @@ echo === Building Terraria GBA Core (Combined) ===
 echo [1/3] Compiling...
 arm-none-eabi-gcc -mthumb -mthumb-interwork -mcpu=arm7tdmi -O2 -c world_gen.c -o world_gen.o
 if errorlevel 1 goto fail
+arm-none-eabi-gcc -mthumb -mthumb-interwork -mcpu=arm7tdmi -O2 -c audio.c -o audio.o
+if errorlevel 1 goto fail
 arm-none-eabi-gcc -mthumb -mthumb-interwork -mcpu=arm7tdmi -O2 -c main.c -o main.o
 if errorlevel 1 goto fail
 
 echo [2/3] Linking...
-arm-none-eabi-gcc -mthumb -mthumb-interwork -specs=gba.specs main.o world_gen.o -o terraria_game.elf
+arm-none-eabi-gcc -mthumb -mthumb-interwork -specs=gba.specs main.o world_gen.o audio.o -o terraria_game.elf
 if errorlevel 1 goto fail
 
 echo [3/3] Creating ROM...

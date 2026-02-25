@@ -22,18 +22,27 @@ TILE_DEFS = [
     ("Ash", r"Tiles\Tiles_57.png", 9, 9),   # 10
     ("GrassPlants", r"Tiles\Tiles_3.png", 0, 0), # 11
     ("Lava", None, 0, 0),                    # 12
-    ("Furnace", r"Tiles\Tiles_17.png", 8, 0),    # 13
-    ("Workbench", r"Tiles\Tiles_18.png", 1, 0),  # 14
-    ("Chest", r"Tiles\Tiles_21.png", 8, 0),      # 15
-    ("Mud", r"Tiles\Tiles_59.png", 9, 9),        # 16
-    ("JungleGrass", r"Tiles\Tiles_60.png", 9, 0),   # 17
-    ("Empty18", None, 0, 0),                      # 18
-    ("Empty19", None, 0, 0),                      # 19
-    ("Sapling", r"Tiles\Tiles_20.png", 0, 0),    # 20
+    ("FurnaceTL", r"Tiles\\Tiles_17.png", 0, 0),   # 13
+    ("WorkbenchL", r"Tiles\\Tiles_18.png", 0, 0),  # 14
+    ("ChestTL", r"Tiles\\Tiles_21.png", 0, 0),     # 15
+    ("Mud", r"Tiles\\Tiles_59.png", 9, 9),         # 16
+    ("JungleGrass", r"Tiles\\Tiles_60.png", 9, 0), # 17
+    
+    # Extra tiles for multi-tile objects
+    ("FurnaceTM", r"Tiles\\Tiles_17.png", 9, 0),   # 18
+    ("FurnaceTR", r"Tiles\\Tiles_17.png", 18, 0),  # 19
+    ("FurnaceBL", r"Tiles\\Tiles_17.png", 0, 9),   # 20
+    ("FurnaceBM", r"Tiles\\Tiles_17.png", 9, 9),   # 21
+    ("FurnaceBR", r"Tiles\\Tiles_17.png", 18, 9),  # 22
+    ("WorkbenchR", r"Tiles\\Tiles_18.png", 9, 0),  # 23
+    ("ChestTR", r"Tiles\\Tiles_21.png", 9, 0),     # 24
+    ("ChestBL", r"Tiles\\Tiles_21.png", 0, 9),     # 25
+    ("ChestBR", r"Tiles\\Tiles_21.png", 9, 9),     # 26
+    ("Sapling", r"Tiles\\Tiles_20.png", 0, 0),     # 27
 ]
 
-IN_DIR = r"c:\Users\sawye\Desktop\Game Dev\Terraria-Gameboy\GBA_Assets"
-OUT_HEADER = r"c:\Users\sawye\Desktop\Game Dev\Terraria-Gameboy\gba_core\tileset.h"
+IN_DIR = "GBA_Assets"
+OUT_HEADER = "gba_core/tileset.h"
 
 # 1. Collect all unique colors across these tiles for an 8bpp (256-color) palette
 colors = [(132, 170, 248)] # Index 0 = Sky Blue (transparent in our tiles)
@@ -66,9 +75,7 @@ for name, filename, px, py in TILE_DEFS:
     
     tile_img = img.crop((px, py, px + 8, py + 8))
     
-    # If it's one of our new furniture tiles, let's grab the 16x16 and downscale to 8x8 to make it look better
-    if name in ["Furnace", "Workbench", "Chest"]:
-        tile_img = img.crop((px, py, px + 16, py + 16)).resize((8, 8), resample=Image.LANCZOS)
+    # Furniture tiles are now handled by individual TILE_DEFS entries
 
     for y in range(8):
         for x in range(8):
@@ -76,7 +83,7 @@ for name, filename, px, py in TILE_DEFS:
             # Treat pure magenta as transparent/padding as well
             magenta = (rgb_val[0] == 247 and rgb_val[2] == 249) or (rgb_val[0]==255 and rgb_val[2]==255 and rgb_val[1]==0)
             
-            if rgb_val[3] < 128 or magenta:
+            if rgb_val[3] < 10 or magenta:
                 tile_indices.append(0)
             else:
                 rgb = (rgb_val[0], rgb_val[1], rgb_val[2])
@@ -114,7 +121,7 @@ if os.path.exists(tree_tops_path):
                         rgb_val = tt_img.getpixel((px, py))
                         magenta = (rgb_val[0] == 247 and rgb_val[2] == 249) or (rgb_val[0]==255 and rgb_val[2]==255 and rgb_val[1]==0)
                         
-                        if rgb_val[3] < 128 or magenta:
+                        if rgb_val[3] < 10 or magenta:
                             tile_indices.append(0)
                         else:
                             rgb = (rgb_val[0], rgb_val[1], rgb_val[2])
@@ -152,7 +159,7 @@ if os.path.exists(branches_path):
                                 continue
                             rgb_val = br_img.getpixel((px, py))
                             magenta = (rgb_val[0] == 247 and rgb_val[2] == 249) or (rgb_val[0]==255 and rgb_val[2]==255 and rgb_val[1]==0)
-                            if rgb_val[3] < 128 or magenta:
+                            if rgb_val[3] < 10 or magenta:
                                 tile_indices.append(0)
                             else:
                                 rgb = (rgb_val[0], rgb_val[1], rgb_val[2])
@@ -185,7 +192,7 @@ for bg_rel in backgrounds:
                             tile_indices.append(0)
                             continue
                         rgb_val = bg_img.getpixel((px, py))
-                        if rgb_val[3] < 128:
+                        if rgb_val[3] < 10:
                             tile_indices.append(0)
                         else:
                             rgb = (rgb_val[0], rgb_val[1], rgb_val[2])
