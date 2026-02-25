@@ -17,7 +17,7 @@
 #define TILE_TORCH  9
 #define TILE_ASH    10
 #define TILE_GRASS_PLANTS 11
-#define TILE_LAVA   12
+// #define TILE_LAVA   12 (Unused)
 #define TILE_FURNACE 13   // TL
 #define TILE_WORKBENCH 14 // L
 #define TILE_CHEST 15     // TL
@@ -45,7 +45,7 @@
 #define ITEM_DIRT    111
 #define ITEM_STONE   112
 #define ITEM_ASH     113
-#define ITEM_WOOD    114
+// #define ITEM_WOOD    114 (Unused)
 #define ITEM_PLANKS  115
 #define ITEM_MUD     116
 #define ITEM_JUNGLE_GRASS 117
@@ -59,10 +59,11 @@
 
 // The world map array, sits in EWRAM (256KB)
 extern unsigned char world_map[WORLD_H][WORLD_W];
-extern unsigned char light_map[WORLD_H][WORLD_W];
+// extern unsigned char light_map[WORLD_H][WORLD_W]; (Unused)
 
 // Random seed
 extern unsigned int seed;
+unsigned int rand_next();
 
 // Functions
 void generate_world(void);

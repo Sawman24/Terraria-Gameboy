@@ -2,14 +2,14 @@
 #include "world_gen.h"
 
 unsigned char __attribute__((section(".ewram"))) world_map[WORLD_H][WORLD_W];
-unsigned char __attribute__((section(".ewram"))) light_map[WORLD_H][WORLD_W];
+// unsigned char __attribute__((section(".ewram"))) light_map[WORLD_H][WORLD_W]; // Unused
 
-int jungle_x = 0;
-int jungle_y = 0;
+// int jungle_x = 0; // Unused
+// int jungle_y = 0; // Unused
 
 unsigned int seed = 12345;
 
-static unsigned int rand_next() {
+unsigned int rand_next() {
     seed = seed * 1103515245 + 12345;
     return (seed >> 16) & 0x7FFF;
 }

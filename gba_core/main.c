@@ -35,8 +35,7 @@ Slime slimes[MAX_SLIMES];
 Chest chests[MAX_CHESTS];
 int open_chest_id = -1; // -1 if no chest is open
 int inv_cursor = 0; // shared
-int inv_held_item_id = 0;
-int inv_held_item_count = 0;
+// Unused globals removed: inv_held_item_id, inv_held_item_count
 
 
 typedef struct {
@@ -81,11 +80,21 @@ const Recipe recipes[] = {
 #define REG_BLDALPHA    (*(volatile uint16_t*)0x04000052)
 #define REG_BLDY        (*(volatile uint16_t*)0x04000054)
 
-// Background Control
+// Background/Window Control
 #define BG_256_COLOR    0x0080
 #define BG_SIZE_32x32   0x0000
 #define BG_TILE_BASE(n) ((n) << 2)
 #define BG_MAP_BASE(n)  ((n) << 8)
+#define REG_WIN0H       (*(volatile uint16_t*)0x04000040)
+#define REG_WIN0V       (*(volatile uint16_t*)0x04000044)
+#define REG_WIN1H       (*(volatile uint16_t*)0x04000042)
+#define REG_WIN1V       (*(volatile uint16_t*)0x04000046)
+#define REG_WININ       (*(volatile uint16_t*)0x04000048)
+#define REG_WINOUT      (*(volatile uint16_t*)0x0400004A)
+#define WIN0_ENABLE     0x2000
+#define WIN1_ENABLE     0x4000
+#define WINOBJ_ENABLE   0x8000
+#define WIN_EFFECT      0x0020
 
 // Object Control
 #define OBJ_ENABLE      0x1000
@@ -107,6 +116,93 @@ int hotbar_count[12] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 int p_x = 0;
 int p_y = 0;
+int inv_open = 0;
+static unsigned int game_time = 0;
+static int current_darkness = 0;
+
+static unsigned short blend_color(unsigned short c1, unsigned short c2, int ratio) {
+    int r1 = c1 & 31, g1 = (c1 >> 5) & 31, b1 = (c1 >> 10) & 31;
+    int r2 = c2 & 31, g2 = (c2 >> 5) & 31, b2 = (c2 >> 10) & 31;
+    int r = r1 + ((r2 - r1) * ratio >> 8);
+    int g = g1 + ((g2 - g1) * ratio >> 8);
+    int b = b1 + ((b2 - b1) * ratio >> 8);
+    return (unsigned short)(r | (g << 5) | (b << 10));
+}
+
+void update_day_night() {
+    game_time = (game_time + 1) % 72000; // 20 min @ 60fps
+    
+    unsigned short sky;
+    int darkness = 0;
+    
+    // Colors (GBA 15-bit BGR)
+    unsigned short day_sky     = 0x7EB0; // Light Blue
+    unsigned short sunset_sky  = 0x15FF; // Orange
+    unsigned short night_sky   = 0x1442; // Dark Blue/Black
+    unsigned short sunrise_sky = 0x3D5F; // Pink/Red
+    
+    if (game_time < 32000) { // Full Day
+        sky = day_sky;
+        darkness = 0;
+    } else if (game_time < 36000) { // Sunset Phase 1 (Day -> Orange)
+        int ratio = ((game_time - 32000) * 256) / 4000;
+        sky = blend_color(day_sky, sunset_sky, ratio);
+        darkness = (ratio * 6) >> 8; 
+    } else if (game_time < 40000) { // Sunset Phase 2 (Orange -> Night)
+        int ratio = ((game_time - 36000) * 256) / 4000;
+        sky = blend_color(sunset_sky, night_sky, ratio);
+        darkness = 6 + ((ratio * 8) >> 8); 
+    } else if (game_time < 68000) { // Full Night
+        sky = night_sky;
+        darkness = 14; 
+    } else if (game_time < 72000) { // Sunrise (Night -> Pink -> Day)
+        int phase = game_time - 68000;
+        if (phase < 2000) { // Night -> Pink
+            int ratio = (phase * 256) / 2000;
+            sky = blend_color(night_sky, sunrise_sky, ratio);
+            darkness = 14 - ((ratio * 7) >> 8); 
+        } else { // Pink -> Day
+            int ratio = ((phase - 2000) * 256) / 2000;
+            sky = blend_color(sunrise_sky, day_sky, ratio);
+            darkness = 7 - ((ratio * 7) >> 8); 
+        }
+    } else {
+        sky = day_sky;
+        darkness = 0;
+    }
+    
+    MEM_PAL_BG[0] = sky;
+    REG_BLDCNT = 0x00FF; // Darken effect (Targets all)
+    REG_BLDY = (unsigned short)darkness;
+    current_darkness = darkness;
+    
+    if (darkness > 0) {
+        REG_WININ = 0x1F1F;  // Inside Win0/1: Layers ON, Effect OFF
+        
+        // WINOUT: Low Byte = Outside all windows, High Byte = Inside OBJWINDOW
+        // We want Effects ON outside (0x3F) and OFF inside OBJWin (0x1F)
+        REG_WINOUT = 0x1F3F; 
+
+        if (inv_open) {
+            // Protect full inventory/chest grid plus crafting
+            REG_WIN0H = (4 << 8) | 236; 
+            REG_WIN0V = (4 << 8) | 92; // Top=4, Bottom=92
+            REG_WIN1H = 0; REG_WIN1V = 0;
+        } else {
+            // Surgical: Hotbar Box (Left)
+            REG_WIN0H = (4 << 8) | 116; 
+            REG_WIN0V = (4 << 8) | 32; // Top=4, Bottom=32
+            // Surgical: Hearts Bar (Right)
+            REG_WIN1H = (168 << 8) | 238; 
+            REG_WIN1V = (4 << 8) | 22; // Top=4, Bottom=22
+        }
+    } else {
+        REG_WININ = 0x3F3F;
+        REG_WINOUT = 0x3F3F;
+        REG_WIN0H = 0; REG_WIN0V = 0;
+        REG_WIN1H = 0; REG_WIN1V = 0;
+    }
+}
 
 int is_near_station(int target_tile) {
     if (target_tile == 0) return 1;
@@ -124,32 +220,6 @@ int is_near_station(int target_tile) {
         }
     }
     return 0;
-}
-
-int get_item_count(int id) {
-    if (id == 0) return 0;
-    int count = 0;
-    for (int i = 0; i < 12; i++) {
-        if (hotbar_id[i] == id) count += hotbar_count[i];
-    }
-    return count;
-}
-
-void consume_items(int id, int qty) {
-    if (id <= 0) return;
-    for (int i = 0; i < 12; i++) {
-        if (hotbar_id[i] == id) {
-            if (hotbar_count[i] >= qty) {
-                hotbar_count[i] -= qty;
-                if (hotbar_count[i] == 0) hotbar_id[i] = 0;
-                return;
-            } else {
-                qty -= hotbar_count[i];
-                hotbar_count[i] = 0;
-                hotbar_id[i] = 0;
-            }
-        }
-    }
 }
 
 void add_item(int id, int qty) {
@@ -170,6 +240,18 @@ void add_item(int id, int qty) {
         }
     }
 }
+
+
+// Restoration of draw_clouds (used at line 1556 in background logic)
+static void draw_clouds() {
+    // Cloud 0: 8x4 tiles, start index 199 at (2, 2)
+    for(int ty=0; ty<4; ty++) for(int tx=0; tx<8; tx++) bg_map[(2 + ty) * 32 + (2 + tx)] = 199 + (ty * 8) + tx;
+    // Cloud 1: 6x2 tiles, start index 231 at (15, 6)
+    for(int ty=0; ty<2; ty++) for(int tx=0; tx<6; tx++) bg_map[(6 + ty) * 32 + (15 + tx)] = 231 + (ty * 6) + tx;
+    // Cloud 2: 5x3 tiles, start index 243 at (24, 3)
+    for(int ty=0; ty<3; ty++) for(int tx=0; tx<5; tx++) bg_map[(3 + ty) * 32 + (24 + tx)] = 243 + (ty * 5) + tx;
+}
+
 
 int find_chest(int x, int y) {
     for (int i = 0; i < MAX_CHESTS; i++) {
@@ -250,32 +332,7 @@ static void fill_bg_map(int start_tile) {
     }
 }
 
-static void draw_clouds() {
-    // Cloud 0: 8x4 tiles, start index 199
-    // Cloud 1: 6x2 tiles, start index 231
-    // Cloud 2: 5x3 tiles, start index 243
-    
-    // Cloud 0 at (2, 2)
-    for(int ty=0; ty<4; ty++) {
-        for(int tx=0; tx<8; tx++) {
-            bg_map[(2 + ty) * 32 + (2 + tx)] = 199 + (ty * 8) + tx;
-        }
-    }
-    
-    // Cloud 1 at (15, 6)
-    for(int ty=0; ty<2; ty++) {
-        for(int tx=0; tx<6; tx++) {
-            bg_map[(6 + ty) * 32 + (15 + tx)] = 231 + (ty * 6) + tx;
-        }
-    }
-    
-    // Cloud 2 at (24, 3)
-    for(int ty=0; ty<3; ty++) {
-        for(int tx=0; tx<5; tx++) {
-            bg_map[(3 + ty) * 32 + (24 + tx)] = 243 + (ty * 5) + tx;
-        }
-    }
-}
+// Function draw_clouds removed (unused)
 
 typedef struct {
     uint16_t attr0;
@@ -344,7 +401,7 @@ void update_map_seam(int prev_cx, int prev_cy, int cx, int cy) {
 
 int is_tile_solid(int tile) {
     if (tile == TILE_AIR || tile == TILE_WOOD || tile == TILE_LEAVES || tile == TILE_TORCH) return 0;
-    if (tile >= 11 && tile <= 15) return 0; // GrassPlants, Lava, Furnace, Workbench, Chest
+    if (tile >= 11 && tile <= 15) return 0; // GrassPlants, (Lava Slot), Furnace, Workbench, Chest
     if (tile >= 18 && tile <= 250) return 0; // Empty, Sapling, Trees, Walls, UI
     return 1;
 }
@@ -404,6 +461,25 @@ int main(void) {
         MEM_BG_TILES[i] = src_gfx[i];
     }
     
+    // Generate a 32x32 circular light mask at tile 460
+    // Use Index 1 (Opaque) instead of 255
+    volatile uint16_t* mask_dest = &MEM_OBJ_TILES[460 * 32];
+    for(int ty=0; ty<4; ty++) {
+        for(int tx=0; tx<4; tx++) {
+            for(int y=0; y<8; y++) {
+                for(int x=0; x<8; x+=2) {
+                    int px1 = tx*8+x, py1 = ty*8+y;
+                    int dx1 = px1-16, dy1 = py1-16;
+                    int v1 = (dx1*dx1 + dy1*dy1 < 16*16) ? 1 : 0;
+                    int px2 = tx*8+x+1, py2 = ty*8+y;
+                    int dx2 = px2-16, dy2 = py2-16;
+                    int v2 = (dx2*dx2 + dy2*dy2 < 16*16) ? 1 : 0;
+                    *mask_dest++ = (v2 << 8) | v1;
+                }
+            }
+        }
+    }
+    
     fill_bg_map(127); // Start with BG2 (Dirt Walls)
     
     // Clear map
@@ -414,8 +490,8 @@ int main(void) {
     // 1. Generate the world into EWRAM
     generate_world();
     
-    // Enable Objects
-    REG_DISPCNT |= OBJ_ENABLE | OBJ_1D_MAP;
+    // Enable Objects, Windows 0 & 1, and OBJ Window
+    REG_DISPCNT |= OBJ_ENABLE | OBJ_1D_MAP | WIN0_ENABLE | WIN1_ENABLE | WINOBJ_ENABLE;
 
     // Load Sprite Palette
     for (int i = 0; i < 256; i++) {
@@ -455,7 +531,6 @@ int main(void) {
     int cursor_dx = 0;
     int cursor_dy = 0;
     
-    int inv_open = 0;
     int inv_mode = 0; // 0=Inventory, 1=Crafting
     int inv_cursor = 0; // 0-11 for inv, 0-2 for craft
     int inv_held_cursor = -1; // -1 = none
@@ -487,15 +562,15 @@ int main(void) {
                 for (int s = 0; s < 12; s++) {
                     chests[chest_count].items_id[s] = 0;
                     chests[chest_count].items_count[s] = 0;
-                    if ((rand() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_MAGIC_MIRROR; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_REGEN_BAND; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_CLOUD_BOTTLE; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_DEPTH_METER; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_ROCKET_BOOTS; chests[chest_count].items_count[s] = 1; continue; }
+                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_MAGIC_MIRROR; chests[chest_count].items_count[s] = 1; continue; }
+                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_REGEN_BAND; chests[chest_count].items_count[s] = 1; continue; }
+                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_CLOUD_BOTTLE; chests[chest_count].items_count[s] = 1; continue; }
+                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_DEPTH_METER; chests[chest_count].items_count[s] = 1; continue; }
+                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_ROCKET_BOOTS; chests[chest_count].items_count[s] = 1; continue; }
                     
-                    if ((rand() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_TORCH; chests[chest_count].items_count[s] = 5 + (rand() % 10); continue; }
-                    if ((rand() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_IRON_BAR; chests[chest_count].items_count[s] = 1 + (rand() % 3); continue; }
-                    if ((rand() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_COPPER_BAR; chests[chest_count].items_count[s] = 1 + (rand() % 3); continue; }
+                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_TORCH; chests[chest_count].items_count[s] = 5 + (rand_next() % 10); continue; }
+                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_IRON_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
+                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_COPPER_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
                 }
                 chest_count++;
             }
@@ -520,7 +595,8 @@ int main(void) {
     audio_init();
     while (1) {
         vsync();
-        REG_DISPCNT = MODE_0 | BG0_ENABLE | BG1_ENABLE | OBJ_ENABLE | OBJ_1D_MAP;
+        update_day_night();
+        REG_DISPCNT = MODE_0 | BG0_ENABLE | BG1_ENABLE | OBJ_ENABLE | OBJ_1D_MAP | WIN0_ENABLE | WIN1_ENABLE | WINOBJ_ENABLE;
         audio_update();
         
         prev_keys = curr_keys;
@@ -1190,11 +1266,11 @@ int main(void) {
 
         // 5. Update Slimes
         if (!inv_open) {
-            // Reduced spawn frequency (1 in 2000 frames)
-            if ((seed % 2000) < 1) { 
+            // Much lower spawn frequency (1 in 5000 frames)
+            if ((rand_next() % 5000) == 0) { 
                 for (int i = 0; i < MAX_SLIMES; i++) {
                     if (!slimes[i].active) {
-                        int rx_off = (seed % 240) - 120;
+                        int rx_off = (rand_next() % 240) - 120;
                         if (rx_off > -30 && rx_off < 30) rx_off = 60; // Safety zone
                         int rx = (p_x >> 8) + rx_off;
                         if (rx < 0) rx = 0; if (rx >= WORLD_W*8) rx = WORLD_W*8-1;
@@ -1221,7 +1297,7 @@ int main(void) {
                             slimes[i].type = (found_y / 8 > 35) ? 1 : 0;
                             slimes[i].hp = (slimes[i].type == 1) ? 35 : 14; 
                             slimes[i].active = 1;
-                            slimes[i].jump_timer = 60 + (seed % 60);
+                            slimes[i].jump_timer = 60 + (rand_next() % 60);
                             slimes[i].flicker = 0;
                             slimes[i].stuck_timer = 0;
                             slimes[i].stuck_x = slimes[i].x >> 8;
@@ -1310,13 +1386,13 @@ int main(void) {
                     
                     if (slimes[i].jump_timer > 0) slimes[i].jump_timer--;
                     else {
-                        slimes[i].dy = -500 - (seed % 150);
+                        slimes[i].dy = -500 - (rand_next() % 150);
                         slimes[i].dx = (p_sx > sx) ? 256 : -256;
                         // If stuck, jump straight UP to try clearing blocks
                         if (slimes[i].stuck_timer > 300) {
                             slimes[i].dy = -800; // Big jump up
                         }
-                        slimes[i].jump_timer = 90 + (seed % 60); // Jump much less often
+                        slimes[i].jump_timer = 90 + (rand_next() % 60); // Jump much less often
                     }
                 }
                 
@@ -1355,14 +1431,14 @@ int main(void) {
                     int sw_bottom = p_sy + 32;
 
                     if (sw_right > s_left && sw_left < s_right && sw_bottom > s_top && sw_top < s_bottom) {
-                        slimes[i].hp -= (10 + (seed % 3)); // 10-12 damage
+                        slimes[i].hp -= (10 + (rand_next() % 3)); // 10-12 damage
                         slimes[i].flicker = 10;
                         audio_play_sfx(sfx_hit, sfx_hit_len);
                         slimes[i].dy = -300;
                         slimes[i].dx = (p_sx > sx) ? -512 : 512;
                         if (slimes[i].hp <= 0) {
                             slimes[i].active = 0;
-                            int gel_amt = seed % 4; // 0-3
+                            int gel_amt = rand_next() % 4; // 0-3
                             for(int g=0; g<gel_amt; g++) {
                                 for(int s=0; s<12; s++) {
                                     if(hotbar_id[s] == ITEM_GEL) { 
@@ -1472,7 +1548,7 @@ int main(void) {
                 else if (count > 0) {
                     if (id == ITEM_DIRT) item_base = 186; 
                     else if (id == ITEM_STONE) item_base = 194; 
-                    else if (id == TILE_WOOD || id == ITEM_WOOD) item_base = 202; 
+                    else if (id == TILE_WOOD) item_base = 202; // ITEM_WOOD removed as redundant
                     else if (id == TILE_PLANKS || id == ITEM_PLANKS) item_base = 210; 
                     else if (id == TILE_MUD || id == ITEM_MUD) item_base = 218;
                     else if (id == TILE_JUNGLE_GRASS || id == ITEM_JUNGLE_GRASS) item_base = 226;
@@ -1699,10 +1775,42 @@ int main(void) {
         prev_x = cam_x;
         prev_y = cam_y;
 
-        // Tree Growth Tick (Target: 1/1500 per sapling per frame)
-        for (int k = 0; k < 22; k++) {
-            int rx = rand() % WORLD_W;
-            int ry = rand() % (WORLD_H - 1);
+        // Dynamic Lighting (Punch holes in darkness using OBJ Window)
+        int light_idx = 10; // Use indices 10-19 (Unused gap between Core and UI)
+        if (current_darkness > 0) {
+            // 1. Player's held torch light
+            int p_draw_x = (ix - cam_x) + 16 - 16; // Center 32x32 on 32x32 player
+            int p_draw_y = (iy - cam_y - current_frame) + 16 - 16;
+            if (hotbar_id[active_slot] == ITEM_TORCH) {
+                oam[light_idx].attr0 = (p_draw_y & 0x00FF) | 0x2800; // OBJWIN mode + 256 color
+                oam[light_idx].attr1 = (p_draw_x & 0x01FF) | 0x8000; // 32x32 size
+                oam[light_idx].attr2 = 460;
+                light_idx++;
+            }
+            // 2. Torches on the background (Scan nearby tiles)
+            int start_tx = cam_x / 8, start_ty = cam_y / 8;
+            for (int ty = start_ty - 2; ty < start_ty + 22; ty++) {
+                for (int tx = start_tx - 2; tx < start_tx + 32; tx++) {
+                    if (tx >= 0 && tx < WORLD_W && ty >= 0 && ty < WORLD_H) {
+                        if (world_map[ty][tx] == TILE_TORCH && light_idx < 20) {
+                            int t_draw_x = (tx * 8) - cam_x - 12; // Center 32x32 circle on 8x8 torch
+                            int t_draw_y = (ty * 8) - cam_y - 12;
+                            oam[light_idx].attr0 = (t_draw_y & 0x00FF) | 0x2800; 
+                            oam[light_idx].attr1 = (t_draw_x & 0x01FF) | 0x8000;
+                            oam[light_idx].attr2 = 460;
+                            light_idx++;
+                        }
+                    }
+                }
+            }
+        }
+        // Hide unused light OAMs
+        for (; light_idx < 20; light_idx++) oam[light_idx].attr0 = 0x0200;
+
+        // Optimized Tree Growth Tick (Target: Surface search only)
+        for (int k = 0; k < 15; k++) {
+            int rx = rand_next() % WORLD_W;
+            int ry = rand_next() % 60; // Saplings only on surface
             if (world_map[ry][rx] == TILE_SAPLING) {
                 grow_tree(rx, ry + 1);
             }

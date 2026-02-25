@@ -12,13 +12,7 @@
 #define TITLE_SCREEN_H   160
 #define TITLE_VRAM ((volatile uint16_t*)0x06000000)
 
-// Splash texts
-static const char* const my_splashes[] = {
-    "Also try Minecraft!",
-    "Now on Game Boy!",
-    "Cthulhu watches...",
-};
-#define NUM_MY_SPLASH 3
+// Splash texts removed (unused)
 
 // --- 8x8 bitmap font ---
 static const unsigned char font8[96][8] = {
@@ -120,9 +114,7 @@ static const unsigned char font8[96][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // DEL
 };
 
-// cos(20deg) * 256 ??? 240, sin(20deg) * 256 ??? 87
-#define COS20 240
-#define SIN20 87
+// COS20/SIN20 removed (unused)
 
 static inline void title_vsync(void) {
     while (REG_VCOUNT >= 160);
@@ -165,28 +157,7 @@ static void title_draw_char(int ch, int px, int py, unsigned short color) {
     }
 }
 
-// Draw text at angle using fixed-point rotation
-// cx, cy = starting position; each char is offset along the rotated baseline
-static void draw_text_angled(const char* text, int cx, int cy,
-                             unsigned short color, unsigned short outline) {
-    int i = 0;
-    while (text[i]) {
-        // Position along rotated baseline (fixed point /256)
-        int dx = (i * 8 * COS20) >> 8;
-        int dy = -(i * 8 * SIN20) >> 8;  // negative = upward angle
-        int px = cx + dx;
-        int py = cy + dy;
-        
-        // Outline
-        title_draw_char(text[i], px-1, py, outline);
-        title_draw_char(text[i], px+1, py, outline);
-        title_draw_char(text[i], px, py-1, outline);
-        title_draw_char(text[i], px, py+1, outline);
-        // Fill
-        title_draw_char(text[i], px, py, color);
-        i++;
-    }
-}
+// draw_text_angled removed (unused)
 
 // Draw horizontal text
 static void title_draw_text(const char* text, int x, int y,
@@ -205,22 +176,12 @@ static void title_draw_text(const char* text, int x, int y,
 
 static int title_str_len(const char* s) { int n=0; while(s[n]) n++; return n; }
 
-static unsigned int title_rng = 54321;
-static unsigned int title_rand_next(void) {
-    title_rng = title_rng * 1103515245 + 12345;
-    return (title_rng >> 16) & 0x7FFF;
-}
+// title_rand_next removed (unused)
 
 // Store BG pixels for the "Press START" region so we can restore them
 static unsigned short start_region[120 * 12]; // 120 wide, 12 tall
 
-// --- PSG Music Sequencer ---
-static int seq_index;        // current position in theme_notes
-static int seq_wait;         // frames until next event
-static int seq_frame;        // total frame counter for the song
-static int ch1_dur;          // remaining frames for ch1 note
-static int ch2_dur;          // remaining frames for ch2 note
-
+// Unused sequencer states removed (now handled in audio.c)
 void run_title_screen(void) {
     REG_DISPCNT = TITLE_MODE_3 | TITLE_BG2_ENABLE;
     
