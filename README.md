@@ -9,6 +9,7 @@ A Terraria clone for the Game Boy Advance, featuring world generation, mining, c
 - **D-Pad Up**: Jump.
   - **Double Jump**: Press again in mid-air (requires **Cloud in a Bottle**).
   - **Flight**: Hold in mid-air for upward thrust (requires **Rocket Boots**).
+- **D-Pad Down**: Use while mining to target blocks below your feet.
 - **A Button**: Interact with nearby chests (opens inventory/chest screen).
 - **B Button**: Use the currently selected item (Sword, Pickaxe, Axe, Blocks, etc.).
   - **Teleport**: Hold while using the **Magic Mirror** to return to your spawn point.
