@@ -195,7 +195,7 @@ static void generate_cave_entrances(int* heights) {
 }
 
 // Grow a mature tree at (x,y) where (x,y) is ground level (the block replaced is y-1)
-void grow_tree(int x, int y) {
+void grow_tree(int x, int y, int sync) {
     if (x < 3 || x >= WORLD_W - 3 || y < 15 || y >= WORLD_H) return;
 
     int height = 5 + (rand_next() % 8); // 5 to 12 tiles tall
@@ -206,9 +206,15 @@ void grow_tree(int x, int y) {
         if (world_map[y - ty][x] != TILE_AIR && world_map[y - ty][x] != TILE_SAPLING) return;
     }
 
+    // Helper for plotting with optional hardware sync
+    #define PLOT(tx, ty, tile) do { \
+        if (sync) set_tile(tx, ty, tile); \
+        else world_map[ty][tx] = tile; \
+    } while(0)
+
     // Trunk
     for (int ty = 0; ty < height; ty++) {
-        world_map[y - 1 - ty][x] = TILE_WOOD;
+        PLOT(x, y - 1 - ty, TILE_WOOD);
     }
     
     // Branches
@@ -227,7 +233,7 @@ void grow_tree(int x, int y) {
                     int map_by = start_by + bcy;
                     if (map_bx >= 0 && map_bx < WORLD_W && map_by >= 0 && map_by < WORLD_H) {
                         if (world_map[map_by][map_bx] == TILE_AIR) {
-                            world_map[map_by][map_bx] = branch_base + (bcy * 2) + bcx;
+                            PLOT(map_bx, map_by, branch_base + (bcy * 2) + bcx);
                         }
                     }
                 }
@@ -249,11 +255,12 @@ void grow_tree(int x, int y) {
             int tile_index = base_tile + (cy * 5) + cx;
             if (map_x >= 0 && map_x < WORLD_W && map_y >= 0 && map_y < WORLD_H) {
                 if (world_map[map_y][map_x] == TILE_AIR || world_map[map_y][map_x] == TILE_WOOD) {
-                    world_map[map_y][map_x] = tile_index;
+                    PLOT(map_x, map_y, tile_index);
                 }
             }
         }
     }
+    #undef PLOT
 }
 
 // Generate simple trees on surface
@@ -266,7 +273,7 @@ static void generate_trees(int* heights) {
             
             // 15% chance to place tree
             if ((rand_next() % 100) < 15) {
-                grow_tree(x, y);
+                grow_tree(x, y, 0);
                 // Skip ahead to not overlap trees too closely
                 x += 4 + (rand_next() % 3);
             }

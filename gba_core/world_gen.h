@@ -67,6 +67,7 @@ unsigned int rand_next();
 
 // Functions
 void generate_world(void);
-void grow_tree(int x, int y);
+void grow_tree(int x, int y, int sync);
+void set_tile(int x, int y, unsigned char tile);
 
 #endif

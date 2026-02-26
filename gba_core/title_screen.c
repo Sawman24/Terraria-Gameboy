@@ -179,10 +179,9 @@ static int title_str_len(const char* s) { int n=0; while(s[n]) n++; return n; }
 // title_rand_next removed (unused)
 
 // Store BG pixels for the "Press START" region so we can restore them
-static unsigned short start_region[120 * 12]; // 120 wide, 12 tall
+static unsigned short start_region[240 * 30]; // Bigger for multiple menu lines
 
-// Unused sequencer states removed (now handled in audio.c)
-void run_title_screen(void) {
+int run_title_screen(void) {
     REG_DISPCNT = TITLE_MODE_3 | TITLE_BG2_ENABLE;
     
     // --- 1. Draw background (once) ---
@@ -198,90 +197,89 @@ void run_title_screen(void) {
     int logo_x = (TITLE_SCREEN_W - 192) / 2;  // center 192px wide
     int logo_y = 30;  // moved up
     
-    title_blit_sprite(logo_0_pixels, logo_0_alpha, LOGO_0_W, LOGO_0_H,
-                logo_x, logo_y);
-    title_blit_sprite(logo_1_pixels, logo_1_alpha, LOGO_1_W, LOGO_1_H,
-                logo_x + 64, logo_y);
-    title_blit_sprite(logo_2_pixels, logo_2_alpha, LOGO_2_W, LOGO_2_H,
-                logo_x + 128, logo_y);
+    title_blit_sprite(logo_0_pixels, logo_0_alpha, LOGO_0_W, LOGO_0_H, logo_x, logo_y);
+    title_blit_sprite(logo_1_pixels, logo_1_alpha, LOGO_1_W, LOGO_1_H, logo_x + 64, logo_y);
+    title_blit_sprite(logo_2_pixels, logo_2_alpha, LOGO_2_W, LOGO_2_H, logo_x + 128, logo_y);
     
     // --- 3. Draw splash text (centered below logo) ---
     const char* splash = "Now on Game Boy!";
     int slen = title_str_len(splash);
     int splash_x = (TITLE_SCREEN_W - slen * 8) / 2;
     int splash_y = logo_y + 62;
+    title_draw_text(splash, splash_x, splash_y, 0x03FF, 0x0000);
     
-    title_draw_text(splash, splash_x, splash_y,
-              0x03FF,   // bright yellow
-              0x0000);  // black outline
-    
-    // --- 4. Save the "Press START" background region for blinking ---
-    {
-        int sx = (TITLE_SCREEN_W - 120) / 2;
-        int sy = 140;
-        int x, y;
-        for (y = 0; y < 12; y++)
-            for (x = 0; x < 120; x++)
-                start_region[y * 120 + x] = TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)];
+    // --- 4. Save the menu background region ---
+    int sx = (TITLE_SCREEN_W - 140) / 2;
+    int sy = 130;
+    for (int y = 0; y < 30; y++) {
+        for (int x = 0; x < 140; x++) {
+            start_region[y * 140 + x] = TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)];
+        }
     }
     
-    // --- 5. Main loop: blink text + play music ---
     unsigned int frame = 0;
     int prev_visible = -1;
+    int state = 0; // 0 = Press Start, 1 = Menu
+    int menu_idx = 0; // 0 = Continue, 1 = New Game
     
+    volatile uint8_t* sram = (volatile uint8_t*)0x0E000000;
+    int has_save = (sram[0] == 'T' && sram[1] == 'E' && sram[2] == 'R' && sram[3] == 'R');
+    
+    // Wait for no keys pressed first just in case
+    while (~REG_KEYINPUT & (KEY_START | KEY_A)) { title_vsync(); audio_update(); }
+    
+    int key_cooldown = 0;
+
     while (1) {
         title_vsync();
         frame++;
         seed += 13;
-        
-        // Update music sequencer
         audio_update();
-        
-        // Stop title screen logic when user presses START
-        if (~REG_KEYINPUT & KEY_START) {
-            // Wait for key release...
-            while (~REG_KEYINPUT & KEY_START) {
-                audio_update(); // Keep music playing while waiting? 
-                title_vsync();
-            }
-            
-            // Stop sound
-            audio_stop();
-            
-            // Clear screen
-            for (int i=0; i<TITLE_SCREEN_W * TITLE_SCREEN_H; i++) {
-                TITLE_VRAM[i] = 0;
-            }
-            break; // Exit the loop to start the main game
-        }
-        
-        int visible = (frame / 30) & 1;
-        
-        // Only redraw when blink state changes
-        if (visible != prev_visible) {
-            prev_visible = visible;
-            
-            int sx = (TITLE_SCREEN_W - 120) / 2;
-            int sy = 140;
-            
-            if (visible) {
-                // Restore background first
-                {
-                    int x, y;
-                    for (y = 0; y < 12; y++)
-                        for (x = 0; x < 120; x++)
-                            TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 120 + x];
+        if (key_cooldown > 0) key_cooldown--;
+
+        if (state == 0) {
+            if ((~REG_KEYINPUT & KEY_START) || (~REG_KEYINPUT & KEY_A)) {
+                if (!has_save) {
+                    audio_stop();
+                    for (int i=0; i<TITLE_SCREEN_W * TITLE_SCREEN_H; i++) TITLE_VRAM[i] = 0;
+                    return 0; // New Game
                 }
-                // Draw text
-                title_draw_text("- Press START -", sx, sy + 1,
-                          0x7FFF,   // white
-                          0x0000);  // black outline
-            } else {
-                // Restore background (erase text)
-                int x, y;
-                for (y = 0; y < 12; y++)
-                    for (x = 0; x < 120; x++)
-                        TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 120 + x];
+                state = 1;
+                prev_visible = -1; // Force redraw
+                key_cooldown = 15;
+            }
+            
+            int visible = (frame / 30) & 1;
+            if (visible != prev_visible) {
+                prev_visible = visible;
+                // Restore bg
+                for (int y = 0; y < 30; y++) {
+                    for (int x = 0; x < 140; x++) TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 140 + x];
+                }
+                if (visible) {
+                    title_draw_text("- Press START -", sx + 10, sy + 8, 0x7FFF, 0x0000);
+                }
+            }
+        } else if (state == 1) {
+            // Menu
+            if (key_cooldown == 0) {
+                if (~REG_KEYINPUT & 0x0080) { menu_idx = 1; prev_visible = -1; key_cooldown = 10; } // KEY_DOWN_BTN is 0x0080
+                if (~REG_KEYINPUT & 0x0040) { menu_idx = 0; prev_visible = -1; key_cooldown = 10; } // KEY_UP is 0x0040
+                if (~REG_KEYINPUT & 0x0001) { // KEY_A is 0x0001
+                    audio_stop();
+                    for (int i=0; i<TITLE_SCREEN_W * TITLE_SCREEN_H; i++) TITLE_VRAM[i] = 0;
+                    return (menu_idx == 0) ? 1 : 0; // 1 = Continue, 0 = New
+                }
+            }
+            
+            if (prev_visible == -1) { // Redraw needed
+                prev_visible = 1;
+                // Restore bg
+                for (int y = 0; y < 30; y++) {
+                    for (int x = 0; x < 140; x++) TITLE_VRAM[(sy + y) * TITLE_SCREEN_W + (sx + x)] = start_region[y * 140 + x];
+                }
+                title_draw_text((menu_idx == 0) ? "> Continue" : "  Continue", sx + 10, sy, 0x7FFF, 0x0000);
+                title_draw_text((menu_idx == 1) ? "> New World" : "  New World", sx + 10, sy + 12, 0x7FFF, 0x0000);
             }
         }
     }

@@ -116,9 +116,14 @@ int hotbar_count[12] = {1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 int p_x = 0;
 int p_y = 0;
+int spawn_x = 0;
+int spawn_y = 0;
+int p_health = 100;
+
 int inv_open = 0;
 static unsigned int game_time = 0;
 static int current_darkness = 0;
+unsigned char tile_solid_lut[256];
 
 static unsigned short blend_color(unsigned short c1, unsigned short c2, int ratio) {
     int r1 = c1 & 31, g1 = (c1 >> 5) & 31, b1 = (c1 >> 10) & 31;
@@ -381,37 +386,104 @@ int cam_y = 0;
 // Screen Base Block 28 = 28 * 2048 bytes = 56KB offset
 volatile uint16_t* hw_map = MEM_VRAM + (28 * 2048 / 2);
 
+// DMA bit flags
+#define DMA_DEST_FIXED  0x02000000
+#define DMA_REPEAT      0x02000000
+#define DMA_SOURCE_FIXED 0x01000000
+#define DMA_IRQ         0x40000000
+
+// Quick DMA3 Copy
+static inline void dma_copy(const void* src, void* dest, uint16_t count, uint32_t mode) {
+    REG_DMA3SAD = (uint32_t)src;
+    REG_DMA3DAD = (uint32_t)dest;
+    REG_DMA3CNT = count | mode | DMA_ENABLE;
+}
+
 void update_map_seam(int prev_cx, int prev_cy, int cx, int cy) {
-    int tx_start = cx / 8;
-    int ty_start = cy / 8;
-    
-    // Redraw the active screen area (around 32x22 tiles)
-    for (int y = -2; y < 22; y++) {
-        for (int x = -1; x < 32; x++) {
-            int map_y = ty_start + y;
-            int map_x = tx_start + x;
-            if (map_x >= 0 && map_x < WORLD_W && map_y >= 0 && map_y < WORLD_H) {
-                int hw_y = map_y & 31;
-                int hw_x = map_x & 31;
-                hw_map[hw_y * 32 + hw_x] = world_map[map_y][map_x];
+    int cur_tx = cx >> 3;
+    int cur_ty = cy >> 3;
+    int old_tx = prev_cx >> 3;
+    int old_ty = prev_cy >> 3;
+
+    // Full redraw if first run or large jump
+    if (prev_cx == -999 || abs(cur_tx - old_tx) > 10 || abs(cur_ty - old_ty) > 10) {
+        for (int y = -2; y < 22; y++) {
+            for (int x = -1; x < 32; x++) {
+                int map_y = cur_ty + y;
+                int map_x = cur_tx + x;
+                if (map_x >= 0 && map_x < WORLD_W && map_y >= 0 && map_y < WORLD_H) {
+                    hw_map[(map_y & 31) * 32 + (map_x & 31)] = world_map[map_y][map_x];
+                }
             }
+        }
+        return;
+    }
+
+    if (cur_tx == old_tx && cur_ty == old_ty) return;
+
+    // Horizontal Seam
+    if (cur_tx > old_tx) { // Moved Right
+        int x = cur_tx + 30;
+        int hw_x = x & 31;
+        for (int y = cur_ty - 2; y < cur_ty + 22; y++) {
+            if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H)
+                hw_map[(y & 31) * 32 + hw_x] = world_map[y][x];
+        }
+    } else if (cur_tx < old_tx) { // Moved Left
+        int x = cur_tx - 1;
+        int hw_x = x & 31;
+        for (int y = cur_ty - 2; y < cur_ty + 22; y++) {
+            if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H)
+                hw_map[(y & 31) * 32 + hw_x] = world_map[y][x];
+        }
+    }
+
+    // Vertical Seam
+    if (cur_ty > old_ty) { // Moved Down
+        int y = cur_ty + 20;
+        int hw_y = y & 31;
+        for (int x = cur_tx - 1; x < cur_tx + 31; x++) {
+            if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H)
+                hw_map[hw_y * 32 + (x & 31)] = world_map[y][x];
+        }
+    } else if (cur_ty < old_ty) { // Moved Up
+        int y = cur_ty - 1;
+        int hw_y = y & 31;
+        for (int x = cur_tx - 1; x < cur_tx + 31; x++) {
+            if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H)
+                hw_map[hw_y * 32 + (x & 31)] = world_map[y][x];
         }
     }
 }
 
-int is_tile_solid(int tile) {
+void update_map_seam(int prev_cx, int prev_cy, int cx, int cy); // Forward decl
+
+void set_tile(int x, int y, unsigned char tile) {
+    if (x < 0 || x >= WORLD_W || y < 0 || y >= WORLD_H) return;
+    world_map[y][x] = tile;
+    
+    // Sync to hardware map ONLY if on-screen to avoid corrupting circular buffer.
+    // The buffer is 32x32. We must ensure we don't overwrite tiles with different world coords.
+    int tx = cam_x >> 3;
+    int ty = cam_y >> 3;
+    if (x >= tx && x <= tx + 29 && y >= ty && y <= ty + 19) {
+        hw_map[(y & 31) * 32 + (x & 31)] = tile;
+    }
+}
+
+int __attribute__((section(".iwram"))) is_tile_solid(int tile) {
     if (tile == TILE_AIR || tile == TILE_WOOD || tile == TILE_LEAVES || tile == TILE_TORCH) return 0;
     if (tile >= 11 && tile <= 15) return 0; // GrassPlants, (Lava Slot), Furnace, Workbench, Chest
     if (tile >= 18 && tile <= 250) return 0; // Empty, Sapling, Trees, Walls, UI
     return 1;
 }
 
-int is_solid(int px, int py) {
-    if (px < 0 || py < 0 || px >= WORLD_W * 8 || py >= WORLD_H * 8) return 1;
-    return is_tile_solid(world_map[py / 8][px / 8]);
+int __attribute__((section(".iwram"))) is_solid(int px, int py) {
+    if (px < 0 || py < 0 || px >= (WORLD_W << 3) || py >= (WORLD_H << 3)) return 1;
+    return tile_solid_lut[world_map[py >> 3][px >> 3]];
 }
 
-int check_collision(int x, int y) {
+int __attribute__((section(".iwram"))) check_collision(int x, int y) {
     // Check 4 corners of player hitbox
     // Box: x+10 to x+21, y+7 to y+29
     int left = x + 10;
@@ -433,9 +505,71 @@ int check_collision(int x, int y) {
     return 0;
 }
 
+void save_game(void) {
+    volatile uint8_t* sram = (volatile uint8_t*)0x0E000000;
+    sram[0] = 'T'; sram[1] = 'E'; sram[2] = 'R'; sram[3] = 'R';
+    int addr = 4;
+    
+    // Compress Map (RLE)
+    uint8_t* map1d = (uint8_t*)world_map;
+    uint8_t current_tile = map1d[0];
+    int run_len = 0;
+    for (int i = 0; i < WORLD_W * WORLD_H; i++) {
+        if (map1d[i] == current_tile && run_len < 255) {
+            run_len++;
+        } else {
+            sram[addr++] = current_tile;
+            sram[addr++] = run_len;
+            current_tile = map1d[i];
+            run_len = 1;
+        }
+    }
+    sram[addr++] = current_tile;
+    sram[addr++] = run_len;
+    
+    #define WRITE_INT(val) do { sram[addr++] = (val) & 0xFF; sram[addr++] = ((val) >> 8) & 0xFF; sram[addr++] = ((val) >> 16) & 0xFF; sram[addr++] = ((val) >> 24) & 0xFF; } while(0)
+    WRITE_INT(p_x); WRITE_INT(p_y); WRITE_INT(p_health); WRITE_INT(spawn_x); WRITE_INT(spawn_y);
+    for(int i=0; i<12; i++) WRITE_INT(hotbar_id[i]);
+    for(int i=0; i<12; i++) WRITE_INT(hotbar_count[i]);
+    
+    for(int i=0; i<MAX_CHESTS; i++) {
+        WRITE_INT(chests[i].x); WRITE_INT(chests[i].y); WRITE_INT(chests[i].active);
+        for(int j=0; j<12; j++) WRITE_INT(chests[i].items_id[j]);
+        for(int j=0; j<12; j++) WRITE_INT(chests[i].items_count[j]);
+    }
+}
+
+int load_game(void) {
+    volatile uint8_t* sram = (volatile uint8_t*)0x0E000000;
+    if (sram[0] != 'T' || sram[1] != 'E' || sram[2] != 'R' || sram[3] != 'R') return 0;
+    int addr = 4;
+    
+    uint8_t* map1d = (uint8_t*)world_map;
+    int i = 0;
+    while (i < WORLD_W * WORLD_H) {
+        uint8_t tile = sram[addr++];
+        uint8_t count = sram[addr++];
+        for (int c = 0; c < count && i < WORLD_W * WORLD_H; c++) {
+            map1d[i++] = tile;
+        }
+    }
+    
+    #define READ_INT(val) do { val = sram[addr] | (sram[addr+1] << 8) | (sram[addr+2] << 16) | (sram[addr+3] << 24); addr+=4; } while(0)
+    READ_INT(p_x); READ_INT(p_y); READ_INT(p_health); READ_INT(spawn_x); READ_INT(spawn_y);
+    for(int k=0; k<12; k++) READ_INT(hotbar_id[k]);
+    for(int k=0; k<12; k++) READ_INT(hotbar_count[k]);
+    
+    for(int k=0; k<MAX_CHESTS; k++) {
+        READ_INT(chests[k].x); READ_INT(chests[k].y); READ_INT(chests[k].active);
+        for(int j=0; j<12; j++) READ_INT(chests[k].items_id[j]);
+        for(int j=0; j<12; j++) READ_INT(chests[k].items_count[j]);
+    }
+    return 1;
+}
+
 int main(void) {
     // 0. Show Title Screen
-    run_title_screen();
+    int is_continue = run_title_screen();
 
     // Basic setup
     REG_DISPCNT = MODE_0 | BG0_ENABLE | BG1_ENABLE | OBJ_ENABLE | OBJ_1D_MAP;
@@ -450,35 +584,36 @@ int main(void) {
     REG_BLDALPHA = 0;
     
     // Load Palette
-    for (int i = 0; i < 256; i++) {
-        MEM_PAL_BG[i] = tileset_palette[i];
-    }
-    // Backdrop color is always index 0
-    ((volatile uint16_t*)0x05000000)[0] = tileset_palette[0];
-    // Load Tiles
-    const uint16_t* src_gfx = (const uint16_t*)tileset_graphics;
-    for (int i = 0; i < sizeof(tileset_graphics)/2; i++) {
-        MEM_BG_TILES[i] = src_gfx[i];
-    }
+    // Load Palette (DMA)
+    dma_copy(tileset_palette, (void*)MEM_PAL_BG, 256, DMA_16BIT);
+    // Backdrop color
+    MEM_PAL_BG[0] = tileset_palette[0];
+    // Load Tiles (DMA)
+    dma_copy(tileset_graphics, (void*)MEM_BG_TILES, sizeof(tileset_graphics)/2, DMA_16BIT);
     
-    // Generate a 32x32 circular light mask at tile 460
-    // Use Index 1 (Opaque) instead of 255
-    volatile uint16_t* mask_dest = &MEM_OBJ_TILES[460 * 32];
-    for(int ty=0; ty<4; ty++) {
-        for(int tx=0; tx<4; tx++) {
+    // Generate a 64x64 circular light mask at tile 440 (uses 128 tile units for 256-color 1D mapping)
+    // 8x8 tiles = 64x64 pixels. Sprite units for 256c 1D mapping count 32-byte blocks.
+    // sprite_graphics is 14080 bytes = 440 blocks. So mask starts at block 440.
+    // Address offset = 440 * 32 = 14080 bytes. In uint16_t, index is 14080 / 2 = 7040.
+    volatile uint16_t* mask_dest = &MEM_OBJ_TILES[7040];
+    for(int ty=0; ty<8; ty++) {
+        for(int tx=0; tx<8; tx++) {
             for(int y=0; y<8; y++) {
                 for(int x=0; x<8; x+=2) {
                     int px1 = tx*8+x, py1 = ty*8+y;
-                    int dx1 = px1-16, dy1 = py1-16;
-                    int v1 = (dx1*dx1 + dy1*dy1 < 16*16) ? 1 : 0;
+                    int dx1 = px1-32, dy1 = py1-32;
+                    int v1 = (dx1*dx1 + dy1*dy1 < 30*30) ? 1 : 0; // Slightly smaller than 32 to ensure clear edges
                     int px2 = tx*8+x+1, py2 = ty*8+y;
-                    int dx2 = px2-16, dy2 = py2-16;
-                    int v2 = (dx2*dx2 + dy2*dy2 < 16*16) ? 1 : 0;
+                    int dx2 = px2-32, dy2 = py2-32;
+                    int v2 = (dx2*dx2 + dy2*dy2 < 30*30) ? 1 : 0;
                     *mask_dest++ = (v2 << 8) | v1;
                 }
             }
         }
     }
+    
+    // Init Tile Collision LUT
+    for (int i = 0; i < 256; i++) tile_solid_lut[i] = is_tile_solid(i);
     
     fill_bg_map(127); // Start with BG2 (Dirt Walls)
     
@@ -487,45 +622,83 @@ int main(void) {
         hw_map[i] = TILE_AIR;
     }
 
-    // 1. Generate the world into EWRAM
-    generate_world();
+    if (is_continue) {
+        if (!load_game()) {
+            is_continue = 0; // Fallback if loading fails
+        }
+    }
     
+    if (!is_continue) {
+        // Reset player for new game
+        for (int i=0; i<12; i++) { hotbar_id[i] = 0; hotbar_count[i] = 0; }
+        hotbar_id[0] = ITEM_SWORD; hotbar_count[0] = 1;
+        hotbar_id[1] = ITEM_PICKAXE; hotbar_count[1] = 1;
+        hotbar_id[2] = ITEM_AXE; hotbar_count[2] = 1;
+
+        generate_world();
+        
+        p_x = ((WORLD_W * 8) / 2) << 8;
+        p_y = 0;
+        
+        // Find surface
+        for(int y=0; y<WORLD_H; y++){
+            if(world_map[y][WORLD_W/2] != TILE_AIR) {
+                p_y = ((y * 8) - 40) << 8;
+                break;
+            }
+        }
+        
+        // Initialize chests from world
+        for (int i = 0; i < MAX_CHESTS; i++) chests[i].active = 0;
+        int chest_count = 0;
+        for (int y = 0; y < WORLD_H - 1; y++) {
+            for (int x = 0; x < WORLD_W - 1; x++) {
+                if (world_map[y][x] == TILE_CHEST && chest_count < MAX_CHESTS) {
+                    chests[chest_count].x = x;
+                    chests[chest_count].y = y;
+                    chests[chest_count].active = 1;
+                    // Populating loot based on new probabilities (Rares 1/300, Regular 1/100)
+                    for (int s = 0; s < 12; s++) {
+                        chests[chest_count].items_id[s] = 0;
+                        chests[chest_count].items_count[s] = 0;
+                        if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_MAGIC_MIRROR; chests[chest_count].items_count[s] = 1; continue; }
+                        if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_REGEN_BAND; chests[chest_count].items_count[s] = 1; continue; }
+                        if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_CLOUD_BOTTLE; chests[chest_count].items_count[s] = 1; continue; }
+                        if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_DEPTH_METER; chests[chest_count].items_count[s] = 1; continue; }
+                        if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_ROCKET_BOOTS; chests[chest_count].items_count[s] = 1; continue; }
+                        
+                        if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_TORCH; chests[chest_count].items_count[s] = 5 + (rand_next() % 10); continue; }
+                        if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_IRON_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
+                        if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_COPPER_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
+                    }
+                    chest_count++;
+                }
+            }
+        }
+    }
+
     // Enable Objects, Windows 0 & 1, and OBJ Window
     REG_DISPCNT |= OBJ_ENABLE | OBJ_1D_MAP | WIN0_ENABLE | WIN1_ENABLE | WINOBJ_ENABLE;
 
     // Load Sprite Palette
-    for (int i = 0; i < 256; i++) {
-        MEM_PAL_OBJ[i] = sprite_palette[i];
-    }
+    dma_copy(sprite_palette, (void*)MEM_PAL_OBJ, 256, DMA_16BIT);
     // Load Sprite Graphics
-    const uint16_t* src_pgfx = (const uint16_t*)sprite_graphics;
-    for (int i = 0; i < sizeof(sprite_graphics)/2; i++) {
-        MEM_OBJ_TILES[i] = src_pgfx[i];
-    }
-    
-    // p_x and p_y are now global
-    p_x = ((WORLD_W * 8) / 2) << 8;
-    p_y = 0;
-    
-    // Find surface
-    for(int y=0; y<WORLD_H; y++){
-        if(world_map[y][WORLD_W/2] != TILE_AIR) {
-            p_y = ((y * 8) - 40) << 8;
-            break;
-        }
-    }
+    dma_copy(sprite_graphics, (void*)MEM_OBJ_TILES, sizeof(sprite_graphics)/2, DMA_16BIT);
     
     int p_dx = 0;
     int p_dy = 0;
     int grounded = 0;
+
+    int was_grounded = 1;
+    int fall_peak_y = p_y;
     int can_double_jump = 0;
     int rocket_fuel = 0;
     int facing_left = 0;
     int frame_timer = 0;
     int current_frame = 0;
     
-    int spawn_x = p_x;
-    int spawn_y = p_y;
+    spawn_x = p_x;
+    spawn_y = p_y;
     
     int mining_mode = 0;
     int cursor_dx = 0;
@@ -541,7 +714,7 @@ int main(void) {
     int swing_timer = 0;
     int swing_frame = 0;
     
-    int p_health = 100;
+    p_health = 100;
     int p_flicker = 0;
     int p_last_damage_timer = 600; // Start ready for regen
     int p_regen_timer = 0;
@@ -549,33 +722,8 @@ int main(void) {
     Slime slimes[MAX_SLIMES];
     for(int i=0; i<MAX_SLIMES; i++) slimes[i].active = 0;
     
-    // Initialize chests from world
-    for (int i = 0; i < MAX_CHESTS; i++) chests[i].active = 0;
-    int chest_count = 0;
-    for (int y = 0; y < WORLD_H - 1; y++) {
-        for (int x = 0; x < WORLD_W - 1; x++) {
-            if (world_map[y][x] == TILE_CHEST && chest_count < MAX_CHESTS) {
-                chests[chest_count].x = x;
-                chests[chest_count].y = y;
-                chests[chest_count].active = 1;
-                // Populating loot based on new probabilities (Rares 1/300, Regular 1/100)
-                for (int s = 0; s < 12; s++) {
-                    chests[chest_count].items_id[s] = 0;
-                    chests[chest_count].items_count[s] = 0;
-                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_MAGIC_MIRROR; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_REGEN_BAND; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_CLOUD_BOTTLE; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_DEPTH_METER; chests[chest_count].items_count[s] = 1; continue; }
-                    if ((rand_next() % 300) == 0) { chests[chest_count].items_id[s] = ITEM_ROCKET_BOOTS; chests[chest_count].items_count[s] = 1; continue; }
-                    
-                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_TORCH; chests[chest_count].items_count[s] = 5 + (rand_next() % 10); continue; }
-                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_IRON_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
-                    if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_COPPER_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
-                }
-                chest_count++;
-            }
-        }
-    }
+    // Slimes initialized above.
+    // Chests initialized in is_continue block.
     
     // Set camera
     cam_x = (p_x >> 8) - 120 + 16;
@@ -784,6 +932,8 @@ int main(void) {
                             int drop = target;
                             int amt = 1;
                             int acorns = 0;
+
+                            // Basic block mappings
                             if (target == TILE_GRASS || target == TILE_DIRT) drop = ITEM_DIRT;
                             else if (target == TILE_STONE) drop = ITEM_STONE;
                             else if (target == TILE_ASH) drop = ITEM_ASH;
@@ -792,71 +942,64 @@ int main(void) {
                             else if (target == TILE_TORCH) drop = ITEM_TORCH;
                             else if (target == TILE_MUD) drop = ITEM_MUD;
                             else if (target == TILE_JUNGLE_GRASS) drop = ITEM_JUNGLE_GRASS;
+                            else if (target == TILE_PLANKS) drop = ITEM_PLANKS;
                             else if (target == TILE_SAPLING) { drop = 0; amt = 0; }
-                            
+
+                            // Multi-tile object macros
+                            #define IS_FURNACE(t) (t == TILE_FURNACE || (t >= TILE_FURNACE_TM && t <= TILE_FURNACE_BR))
+                            #define IS_WORKBENCH(t) (t == TILE_WORKBENCH || t == TILE_WORKBENCH_R)
+                            #define IS_CHEST(t) (t == TILE_CHEST || (t >= TILE_CHEST_TR && t <= TILE_CHEST_BR))
+
                             if (target == TILE_WOOD) {
                                 if (cur_id == ITEM_AXE) {
-                                    drop = ITEM_PLANKS;
-                                    amt = 0;
-                                    acorns = (seed % 3); // 0-2 acorns
+                                    drop = ITEM_PLANKS; amt = 0; acorns = (seed % 3);
                                     int yy = cy;
+                                    while (yy + 1 < WORLD_H && world_map[yy + 1][cx] == TILE_WOOD) yy++;
                                     while (yy >= 0) {
                                         int t_center = world_map[yy][cx];
                                         if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 28 && t_center <= 126)) {
                                             for (int lx = cx - 2; lx <= cx + 2; lx++) {
                                                 if (lx >= 0 && lx < WORLD_W) {
                                                     int t = world_map[yy][lx];
-                                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 28 && t <= 126)) {
-                                                        world_map[yy][lx] = TILE_AIR;
-                                                        hw_map[(yy % 32) * 32 + (lx % 32)] = TILE_AIR;
-                                                    }
+                                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 28 && t <= 126)) set_tile(lx, yy, TILE_AIR);
                                                 }
                                             }
-                                            amt++;
-                                            yy--;
+                                            amt++; yy--;
                                         } else break;
                                     }
-                                } else {
-                                    amt = 0; // Pickaxe can't break trees
-                                }
-                            } else if (target == TILE_LEAVES || (target >= 21 && target <= 119)) {
+                                } else { amt = 0; }
+                            } else if (target == TILE_LEAVES || (target >= 28 && target <= 126)) {
+                                if (cur_id == ITEM_AXE) set_tile(cx, cy, TILE_AIR);
                                 amt = 0;
-                            } else {
-                                if (cur_id == ITEM_PICKAXE) {
-                                    int drop_check = world_map[cy][cx];
-                                    if (drop_check == TILE_WORKBENCH || drop_check == TILE_WORKBENCH_R) {
-                                        for(int y0=cy-1; y0<=cy+1; y0++) for(int x0=cx-1; x0<=cx+1; x0++) {
-                                            if (x0 >= 0 && x0 < WORLD_W && y0 >= 0 && y0 < WORLD_H) {
-                                                if (world_map[y0][x0] == TILE_WORKBENCH || world_map[y0][x0] == TILE_WORKBENCH_R) world_map[y0][x0] = TILE_AIR;
-                                            }
-                                        }
-                                        drop = ITEM_WORKBENCH;
-                                    } else if (drop_check >= TILE_FURNACE && drop_check <= TILE_FURNACE_BR) {
-                                        for(int y0=cy-2; y0<=cy+2; y0++) for(int x0=cx-2; x0<=cx+2; x0++) {
-                                            if (x0 >= 0 && x0 < WORLD_W && y0 >= 0 && y0 < WORLD_H) {
-                                                if (world_map[y0][x0] >= TILE_FURNACE && world_map[y0][x0] <= TILE_FURNACE_BR) world_map[y0][x0] = TILE_AIR;
-                                            }
-                                        }
-                                        drop = ITEM_FURNACE;
-                                    } else if (drop_check >= TILE_CHEST && drop_check <= TILE_CHEST_BR) {
-                                        remove_chest(cx, cy);
-                                        for(int y0=cy-2; y0<=cy+2; y0++) for(int x0=cx-1; x0<=cx+1; x0++) {
-                                            if (x0 >= 0 && x0 < WORLD_W && y0 >= 0 && y0 < WORLD_H) {
-                                                if (world_map[y0][x0] >= TILE_CHEST && world_map[y0][x0] <= TILE_CHEST_BR) world_map[y0][x0] = TILE_AIR;
-                                            }
-                                        }
-                                        drop = ITEM_CHEST;
-                                    } else {
-                                        world_map[cy][cx] = TILE_AIR;
-                                    }
+                            } else if (cur_id == ITEM_PICKAXE) {
+                                if (IS_WORKBENCH(target)) {
+                                    drop = ITEM_WORKBENCH; amt = 1;
+                                    int ox = cx; if (target == TILE_WORKBENCH_R) ox--;
+                                    for(int x=ox; x<=ox+1; x++) if (IS_WORKBENCH(world_map[cy][x])) set_tile(x, cy, TILE_AIR);
+                                } else if (IS_FURNACE(target)) {
+                                    drop = ITEM_FURNACE; amt = 1;
+                                    int ox = cx, oy = cy;
+                                    if (target == TILE_FURNACE_TM || target == TILE_FURNACE_BM) ox--;
+                                    else if (target == TILE_FURNACE_TR || target == TILE_FURNACE_BR) ox -= 2;
+                                    if (target >= TILE_FURNACE_BL && target <= TILE_FURNACE_BR) oy--;
+                                    for(int y0=oy; y0<=oy+1; y0++) for(int x0=ox; x0<=ox+2; x0++)
+                                        if (IS_FURNACE(world_map[y0][x0])) set_tile(x0, y0, TILE_AIR);
+                                } else if (IS_CHEST(target)) {
+                                    drop = ITEM_CHEST; amt = 1; remove_chest(cx, cy);
+                                    int ox = cx, oy = cy;
+                                    if (target == TILE_CHEST_TR || target == TILE_CHEST_BR) ox--;
+                                    if (target == TILE_CHEST_BL || target == TILE_CHEST_BR) oy--;
+                                    for(int y0=oy; y0<=oy+1; y0++) for(int x0=ox; x0<=ox+1; x0++)
+                                        if (IS_CHEST(world_map[y0][x0])) set_tile(x0, y0, TILE_AIR);
                                 } else {
-                                    amt = 0; // Axe can't break stone/dirt
+                                    set_tile(cx, cy, TILE_AIR);
                                 }
-                            }
-                            
-                            // Add items
+                            } else { amt = 0; }
+
+                            // Grant Items
                             for (int a = 0; a < amt + acorns; a++) {
                                 int id = (a < amt) ? drop : ITEM_ACORN;
+                                if (id <= 0) continue;
                                 int added = 0;
                                 for (int s = 0; s < 12; s++) {
                                     if (hotbar_id[s] == id && hotbar_count[s] > 0 && hotbar_count[s] < 99) {
@@ -883,8 +1026,7 @@ int main(void) {
                             if (below == TILE_DIRT || below == TILE_GRASS) {
                                 // Check clearance (two blocks above)
                                 if (cy > 2 && world_map[cy - 1][cx] == TILE_AIR && world_map[cy - 2][cx] == TILE_AIR) {
-                                    world_map[cy][cx] = TILE_SAPLING;
-                                    hw_map[(cy % 32) * 32 + (cx % 32)] = TILE_SAPLING;
+                                    set_tile(cx, cy, TILE_SAPLING);
                                     hotbar_count[active_slot]--;
                                     if (hotbar_count[active_slot] <= 0) {
                                         hotbar_count[active_slot] = 0;
@@ -907,31 +1049,27 @@ int main(void) {
                             else if (cur_id == ITEM_WORKBENCH) {
                                 // 2x1
                                 if (cx < WORLD_W - 1 && !is_tile_solid(world_map[cy][cx+1])) {
-                                    world_map[cy][cx] = TILE_WORKBENCH;
-                                    world_map[cy][cx+1] = TILE_WORKBENCH_R;
+                                    set_tile(cx, cy, TILE_WORKBENCH);
+                                    set_tile(cx+1, cy, TILE_WORKBENCH_R);
                                 } else tile_to_place = 0;
                             } else if (cur_id == ITEM_FURNACE) {
                                 // 3x2
                                 if (cx < WORLD_W - 2 && cy < WORLD_H - 1 && 
                                     !is_tile_solid(world_map[cy][cx+1]) && !is_tile_solid(world_map[cy][cx+2]) &&
                                     !is_tile_solid(world_map[cy+1][cx]) && !is_tile_solid(world_map[cy+1][cx+1]) && !is_tile_solid(world_map[cy+1][cx+2])) {
-                                    world_map[cy][cx] = TILE_FURNACE; world_map[cy][cx+1] = TILE_FURNACE_TM; world_map[cy][cx+2] = TILE_FURNACE_TR;
-                                    world_map[cy+1][cx] = TILE_FURNACE_BL; world_map[cy+1][cx+1] = TILE_FURNACE_BM; world_map[cy+1][cx+2] = TILE_FURNACE_BR;
+                                    set_tile(cx, cy, TILE_FURNACE); set_tile(cx+1, cy, TILE_FURNACE_TM); set_tile(cx+2, cy, TILE_FURNACE_TR);
+                                    set_tile(cx, cy+1, TILE_FURNACE_BL); set_tile(cx+1, cy+1, TILE_FURNACE_BM); set_tile(cx+2, cy+1, TILE_FURNACE_BR);
                                 } else tile_to_place = 0;
                             } else if (cur_id == ITEM_CHEST) {
                                 // 2x2
                                 if (cx < WORLD_W - 1 && cy < WORLD_H - 1 && 
                                     !is_tile_solid(world_map[cy][cx+1]) && !is_tile_solid(world_map[cy+1][cx]) && !is_tile_solid(world_map[cy+1][cx+1])) {
-                                    world_map[cy][cx] = TILE_CHEST; world_map[cy][cx+1] = TILE_CHEST_TR;
-                                    world_map[cy+1][cx] = TILE_CHEST_BL; world_map[cy+1][cx+1] = TILE_CHEST_BR;
+                                    set_tile(cx, cy, TILE_CHEST); set_tile(cx+1, cy, TILE_CHEST_TR);
+                                    set_tile(cx, cy+1, TILE_CHEST_BL); set_tile(cx+1, cy+1, TILE_CHEST_BR);
                                     add_chest(cx, cy);
                                 } else tile_to_place = 0;
                             }
-
-                            if (tile_to_place > 0) {
-                                world_map[cy][cx] = tile_to_place;
-                                hw_map[(cy % 32) * 32 + (cx % 32)] = tile_to_place;
-                            }
+                            if (tile_to_place > 0) set_tile(cx, cy, tile_to_place);
                             
                             if (tile_to_place > 0 || cur_id == ITEM_WORKBENCH || cur_id == ITEM_FURNACE || cur_id == ITEM_CHEST) {
                                 hotbar_count[active_slot]--;
@@ -1100,106 +1238,100 @@ int main(void) {
                 }
             }
             
-            if (swing_timer == 14 && smart_cx != -1 && smart_cy != -1) {
-                int rnd = seed % 3;
-                if (rnd == 0) audio_play_sfx(sfx_dig0, sfx_dig0_len);
-                else if (rnd == 1) audio_play_sfx(sfx_dig1, sfx_dig1_len);
-                else audio_play_sfx(sfx_dig2, sfx_dig2_len);
-                
-                int target = world_map[smart_cy][smart_cx];
-                int drop = target;
-                int amt = 1;
-                int acorns = 0;
-                if (drop == TILE_GRASS || drop == TILE_DIRT) drop = ITEM_DIRT;
-                else if (drop == TILE_STONE) drop = ITEM_STONE;
-                else if (drop == TILE_ASH) drop = ITEM_ASH;
-                else if (drop == TILE_COPPER) drop = ITEM_COPPER_ORE;
-                else if (drop == TILE_IRON) drop = ITEM_IRON_ORE;
-                else if (drop == TILE_TORCH) drop = ITEM_TORCH;
-                else if (drop == TILE_MUD) drop = ITEM_MUD;
-                else if (drop == TILE_JUNGLE_GRASS) drop = ITEM_JUNGLE_GRASS;
-                else if (drop == TILE_SAPLING) { drop = 0; amt = 0; }
-                else if (drop == TILE_WORKBENCH || drop == TILE_WORKBENCH_R) {
-                    drop = ITEM_WORKBENCH;
-                    // Find neighbor and clear
-                    for(int y=smart_cy-1; y<=smart_cy+1; y++) for(int x=smart_cx-1; x<=smart_cx+1; x++) {
-                        if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H) {
-                            if (world_map[y][x] == TILE_WORKBENCH || world_map[y][x] == TILE_WORKBENCH_R) world_map[y][x] = TILE_AIR;
-                        }
-                    }
-                } else if (drop >= TILE_FURNACE && drop <= TILE_FURNACE_BR && drop != TILE_WORKBENCH && drop != TILE_CHEST) {
-                    drop = ITEM_FURNACE;
-                    for(int y=smart_cy-2; y<=smart_cy+2; y++) for(int x=smart_cx-2; x<=smart_cx+2; x++) {
-                        if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H) {
-                            if (world_map[y][x] >= TILE_FURNACE && world_map[y][x] <= TILE_FURNACE_BR) world_map[y][x] = TILE_AIR;
-                        }
-                    }
-                } else if (drop >= TILE_CHEST && drop <= TILE_CHEST_BR) {
-                    remove_chest(smart_cx, smart_cy);
-                    drop = ITEM_CHEST;
-                    for(int y=smart_cy-2; y<=smart_cy+2; y++) for(int x=smart_cx-2; x<=smart_cx+2; x++) {
-                        if (x >= 0 && x < WORLD_W && y >= 0 && y < WORLD_H) {
-                            if (world_map[y][x] >= TILE_CHEST && world_map[y][x] <= TILE_CHEST_BR) world_map[y][x] = TILE_AIR;
-                        }
-                    }
-                }
-                else if (drop == TILE_WOOD) drop = ITEM_PLANKS;
-                else if (drop == TILE_PLANKS) drop = ITEM_PLANKS;
-                else if (drop == TILE_MUD) drop = ITEM_MUD;
-                else if (drop == TILE_JUNGLE_GRASS) drop = ITEM_JUNGLE_GRASS;
-                
-                if (target == TILE_WOOD) {
-                    if (cur_tool == ITEM_AXE) {
-                        drop = ITEM_PLANKS;
-                        amt = 0;
-                        acorns = (seed % 3);
-                        int ty = smart_cy;
-                        while (ty >= 0) {
-                            int t_center = world_map[ty][smart_cx];
-                            if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 28 && t_center <= 126)) {
-                                world_map[ty][smart_cx] = TILE_AIR;
-                                hw_map[(ty % 32) * 32 + (smart_cx % 32)] = TILE_AIR;
-                                for (int lx = smart_cx - 2; lx <= smart_cx + 2; lx++) {
-                                    if (lx >= 0 && lx < WORLD_W) {
-                                        int t = world_map[ty][lx];
-                                        if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 28 && t <= 126)) {
-                                            world_map[ty][lx] = TILE_AIR;
-                                            hw_map[(ty % 32) * 32 + (lx % 32)] = TILE_AIR;
-                                        }
-                                    }
+        // Helper macros for multi-tile checks
+        #define IS_FURNACE(t) (t == TILE_FURNACE || (t >= TILE_FURNACE_TM && t <= TILE_FURNACE_BR))
+        #define IS_WORKBENCH(t) (t == TILE_WORKBENCH || t == TILE_WORKBENCH_R)
+        #define IS_CHEST(t) (t == TILE_CHEST || (t >= TILE_CHEST_TR && t <= TILE_CHEST_BR))
+
+        if (swing_timer == 14 && smart_cx != -1 && smart_cy != -1) {
+            int rnd = seed % 3;
+            if (rnd == 0) audio_play_sfx(sfx_dig0, sfx_dig0_len);
+            else if (rnd == 1) audio_play_sfx(sfx_dig1, sfx_dig1_len);
+            else audio_play_sfx(sfx_dig2, sfx_dig2_len);
+            
+            int target = world_map[smart_cy][smart_cx];
+            int drop = 0;
+            int amt = 0;
+            int acorns = 0;
+
+            // Safe tile clear (updates HW map ONLY if on-screen)
+            #define CLEAR_TILE(tx, ty) set_tile(tx, ty, TILE_AIR)
+
+            if (target == TILE_GRASS || target == TILE_DIRT) { drop = ITEM_DIRT; amt = 1; }
+            else if (target == TILE_STONE) { drop = ITEM_STONE; amt = 1; }
+            else if (target == TILE_ASH) { drop = ITEM_ASH; amt = 1; }
+            else if (target == TILE_COPPER) { drop = ITEM_COPPER_ORE; amt = 1; }
+            else if (target == TILE_IRON) { drop = ITEM_IRON_ORE; amt = 1; }
+            else if (target == TILE_TORCH) { drop = ITEM_TORCH; amt = 1; }
+            else if (target == TILE_MUD) { drop = ITEM_MUD; amt = 1; }
+            else if (target == TILE_JUNGLE_GRASS) { drop = ITEM_JUNGLE_GRASS; amt = 1; }
+            else if (target == TILE_PLANKS) { drop = ITEM_PLANKS; amt = 1; }
+            else if (IS_WORKBENCH(target)) {
+                drop = ITEM_WORKBENCH; amt = 1;
+                int ox = smart_cx; if (target == TILE_WORKBENCH_R) ox--;
+                for(int x=ox; x<=ox+1; x++) if (IS_WORKBENCH(world_map[smart_cy][x])) CLEAR_TILE(x, smart_cy);
+            } else if (IS_FURNACE(target)) {
+                drop = ITEM_FURNACE; amt = 1;
+                int ox = smart_cx, oy = smart_cy;
+                if (target == TILE_FURNACE_TM || target == TILE_FURNACE_BM) ox--;
+                else if (target == TILE_FURNACE_TR || target == TILE_FURNACE_BR) ox -= 2;
+                if (target >= TILE_FURNACE_BL && target <= TILE_FURNACE_BR) oy--;
+                for(int y=oy; y<=oy+1; y++) for(int x=ox; x<=ox+2; x++)
+                    if (IS_FURNACE(world_map[y][x])) CLEAR_TILE(x, y);
+            } else if (IS_CHEST(target)) {
+                drop = ITEM_CHEST; amt = 1; remove_chest(smart_cx, smart_cy);
+                int ox = smart_cx, oy = smart_cy;
+                if (target == TILE_CHEST_TR || target == TILE_CHEST_BR) ox--;
+                if (target == TILE_CHEST_BL || target == TILE_CHEST_BR) oy--;
+                for(int y=oy; y<=oy+1; y++) for(int x=ox; x<=ox+1; x++)
+                    if (IS_CHEST(world_map[y][x])) CLEAR_TILE(x, y);
+            } else if (target == TILE_WOOD) {
+                if (cur_tool == ITEM_AXE) {
+                    drop = ITEM_PLANKS; amt = 0; acorns = (seed % 3);
+                    int ty = smart_cy;
+                    while (ty >= 0) {
+                        int t_center = world_map[ty][smart_cx];
+                        if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 28 && t_center <= 126)) {
+                            CLEAR_TILE(smart_cx, ty);
+                            for (int lx = smart_cx - 2; lx <= smart_cx + 2; lx++)
+                                if (lx >= 0 && lx < WORLD_W) {
+                                    int t = world_map[ty][lx];
+                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 28 && t <= 126)) CLEAR_TILE(lx, ty);
                                 }
-                                amt++;
-                                ty--;
-                            } else break;
-                        }
-                    } else amt = 0;
-                } else if (target == TILE_LEAVES || (target >= 28 && target <= 126)) {
-                    amt = 0;
-                } else {
-                    if (cur_tool == ITEM_PICKAXE) {
-                        world_map[smart_cy][smart_cx] = TILE_AIR;
-                        hw_map[(smart_cy % 32) * 32 + (smart_cx % 32)] = TILE_AIR;
-                    } else amt = 0;
-                }
-                
-                for (int a = 0; a < amt + acorns; a++) {
-                    int id = (a < amt) ? drop : ITEM_ACORN;
-                    int added = 0;
-                    for (int s = 0; s < 12; s++) {
-                        if (hotbar_id[s] == id && hotbar_count[s] > 0 && hotbar_count[s] < 99) {
-                            hotbar_count[s]++; added = 1; break;
-                        }
+                            amt++; ty--;
+                        } else break;
                     }
-                    if (!added) {
-                        for (int s = 2; s < 12; s++) {
-                            if (hotbar_count[s] == 0 && hotbar_id[s] != ITEM_SWORD && hotbar_id[s] != ITEM_PICKAXE && hotbar_id[s] != ITEM_AXE) {
-                                hotbar_id[s] = id; hotbar_count[s] = 1; break;
-                            }
+                }
+            } else if (target != TILE_SAPLING && target != TILE_AIR && target != TILE_GRASS_PLANTS && target != TILE_LEAVES && (target < 28 || target > 126)) {
+                if (cur_tool == ITEM_PICKAXE) { drop = target; amt = 1; }
+            }
+
+            // Final single-tile clear for basic blocks (Dirt, Stone, etc.)
+            if (amt > 0 && world_map[smart_cy][smart_cx] != TILE_AIR && cur_tool == ITEM_PICKAXE) {
+                CLEAR_TILE(smart_cx, smart_cy);
+            }
+
+            // Grant Items
+            for (int a = 0; a < amt + acorns; a++) {
+                int id = (a < amt) ? drop : ITEM_ACORN;
+                if (id <= 0) continue;
+                int added = 0;
+                for (int s = 0; s < 12; s++) {
+                    if (hotbar_id[s] == id && hotbar_count[s] > 0 && hotbar_count[s] < 99) {
+                        hotbar_count[s]++; added = 1; break;
+                    }
+                }
+                if (!added) {
+                    for (int s = 2; s < 12; s++) {
+                        if (hotbar_count[s] == 0 && hotbar_id[s] != ITEM_SWORD && hotbar_id[s] != ITEM_PICKAXE && hotbar_id[s] != ITEM_AXE) {
+                            hotbar_id[s] = id; hotbar_count[s] = 1; added = 1; break;
                         }
                     }
                 }
             }
+            }
         }
+
         
         if (p_dx != 0) {
             int new_x = (p_x + p_dx) >> 8;
@@ -1234,6 +1366,25 @@ int main(void) {
                 p_y = (p_y & ~0xFF); // Snap
             }
         }
+        
+        // --- Fall Damage Logic ---
+        if (!grounded) {
+            if (p_y < fall_peak_y) fall_peak_y = p_y; // Keep track of highest point
+        }
+        if (grounded && !was_grounded) {
+            int fall_blocks = (p_y - fall_peak_y) >> 11; // 1 block = 8px * 256 sub = 2048 (1<<11)
+            if (fall_blocks > 10) {
+                int extra = fall_blocks - 10;
+                int dmg = 5 + (extra * extra); // 5 base + quadratic growth
+                p_health -= dmg;
+                if (p_health < 0) p_health = 0;
+                p_flicker = 45;
+                p_last_damage_timer = 0;
+                audio_play_sfx(sfx_hurt, sfx_hurt_len);
+            }
+        }
+        if (p_dy < 0 || grounded) fall_peak_y = p_y; // Reset peak if moving up or on ground
+        was_grounded = grounded;
         
         // Final integer coords
         ix = p_x >> 8;
@@ -1524,8 +1675,8 @@ int main(void) {
             int num_slots = (inv_mode == 2) ? 24 : (inv_open ? 12 : 4);
             for (int i = 0; i < 24; i++) {
                 if (i >= num_slots) {
-                    oam[i + 20].attr0 = 0x0200; oam[i + 92].attr0 = 0x0200;
-                    oam[i*2 + 44].attr0 = 0x0200; oam[i*2 + 45].attr0 = 0x0200;
+                    oam[i + 80].attr0 = 0x0200; oam[i + 104].attr0 = 0x0200;
+                    oam[i*2 + 32].attr0 = 0x0200; oam[i*2 + 33].attr0 = 0x0200;
                     continue;
                 }
                 int bx, by;
@@ -1533,9 +1684,9 @@ int main(void) {
                 else { bx = 124 + ((i-12) % 4) * 28; by = 4 + ((i-12) / 4) * 28; }
                 
                 // 1. Background
-                oam[i + 92].attr0 = (by & 0x00FF) | 0x2000;
-                oam[i + 92].attr1 = (bx & 0x01FF) | 0x8000;
-                oam[i + 92].attr2 = 58;
+                oam[i + 104].attr0 = (by & 0x00FF) | 0x2000;
+                oam[i + 104].attr1 = (bx & 0x01FF) | 0x8000;
+                oam[i + 104].attr2 = 58;
 
                 // 2. Item Icon
                 int id = get_comb_id(i);
@@ -1548,7 +1699,7 @@ int main(void) {
                 else if (count > 0) {
                     if (id == ITEM_DIRT) item_base = 186; 
                     else if (id == ITEM_STONE) item_base = 194; 
-                    else if (id == TILE_WOOD) item_base = 202; // ITEM_WOOD removed as redundant
+                    else if (id == TILE_WOOD) item_base = 202; 
                     else if (id == TILE_PLANKS || id == ITEM_PLANKS) item_base = 210; 
                     else if (id == TILE_MUD || id == ITEM_MUD) item_base = 218;
                     else if (id == TILE_JUNGLE_GRASS || id == ITEM_JUNGLE_GRASS) item_base = 226;
@@ -1570,57 +1721,57 @@ int main(void) {
                 }
                 
                 if (item_base > 0) {
-                    oam[i + 20].attr0 = ((by + 8) & 0x00FF) | 0x2000;
-                    oam[i + 20].attr1 = ((bx + 8) & 0x01FF) | 0x4000; 
-                    oam[i + 20].attr2 = item_base;
-                } else oam[i + 20].attr0 = 0x0200;
+                    oam[i + 80].attr0 = ((by + 8) & 0x00FF) | 0x2000;
+                    oam[i + 80].attr1 = ((bx + 8) & 0x01FF) | 0x4000; 
+                    oam[i + 80].attr2 = item_base;
+                } else oam[i + 80].attr0 = 0x0200;
 
                 // 3. Numbers
                 if (id != ITEM_SWORD && id != ITEM_PICKAXE && id != ITEM_AXE && count > 1) {
                     int tens = count / 10; int ones = count % 10;
                     int num_y = by + 22; int num_x = bx + 19;
                     if (tens > 0) {
-                        oam[i*2 + 44].attr0 = (num_y & 0x00FF) | 0x2000;
-                        oam[i*2 + 44].attr1 = ((num_x - 4) & 0x01FF) | 0x0000;
-                        oam[i*2 + 44].attr2 = 386 + (tens * 2);
-                    } else oam[i*2 + 44].attr0 = 0x0200;
-                    oam[i*2 + 45].attr0 = (num_y & 0x00FF) | 0x2000;
-                    oam[i*2 + 45].attr1 = (num_x & 0x01FF) | 0x0000;
-                    oam[i*2 + 45].attr2 = 386 + (ones * 2);
-                } else { oam[i*2 + 44].attr0 = 0x0200; oam[i*2 + 45].attr0 = 0x0200; }
+                        oam[i*2 + 32].attr0 = (num_y & 0x00FF) | 0x2000;
+                        oam[i*2 + 32].attr1 = ((num_x - 4) & 0x01FF) | 0x0000;
+                        oam[i*2 + 32].attr2 = 386 + (tens * 2);
+                    } else oam[i*2 + 32].attr0 = 0x0200;
+                    oam[i*2 + 33].attr0 = (num_y & 0x00FF) | 0x2000;
+                    oam[i*2 + 33].attr1 = (num_x & 0x01FF) | 0x0000;
+                    oam[i*2 + 33].attr2 = 386 + (ones * 2);
+                } else { oam[i*2 + 32].attr0 = 0x0200; oam[i*2 + 33].attr0 = 0x0200; }
             }
             
             // Highlights
             int h_i = inv_cursor;
             int hb_x = (h_i < 12) ? (4 + (h_i % 4) * 28) : (124 + ((h_i - 12) % 4) * 28);
             int hb_y = (h_i < 12) ? (4 + (h_i / 4) * 28) : (4 + ((h_i - 12) / 4) * 28);
-            oam[7].attr0 = (hb_y & 0x00FF) | 0x2000;
-            oam[7].attr1 = (hb_x & 0x01FF) | 0x8000;
-            oam[7].attr2 = 90;
+            oam[15].attr0 = (hb_y & 0x00FF) | 0x2000;
+            oam[15].attr1 = (hb_x & 0x01FF) | 0x8000;
+            oam[15].attr2 = 90;
             
             if (inv_held_cursor != -1) {
                 int hh_i = inv_held_cursor;
                 int hhb_x = (hh_i < 12) ? (4 + (hh_i % 4) * 28) : (124 + ((hh_i - 12) % 4) * 28);
                 int hhb_y = (hh_i < 12) ? (4 + (hh_i / 4) * 28) : (4 + ((hh_i - 12) / 4) * 28);
-                oam[8].attr0 = (hhb_y & 0x00FF) | 0x2000;
-                oam[8].attr1 = (hhb_x & 0x01FF) | 0x8000;
-                oam[8].attr2 = 90;
-                if (frame_timer % 20 < 10) oam[8].attr0 |= 0x0200;
-            } else oam[8].attr0 = 0x0200;
+                oam[16].attr0 = (hhb_y & 0x00FF) | 0x2000;
+                oam[16].attr1 = (hhb_x & 0x01FF) | 0x8000;
+                oam[16].attr2 = 90;
+                if (frame_timer % 20 < 10) oam[16].attr0 |= 0x0200;
+            } else oam[16].attr0 = 0x0200;
             
             if (!inv_open) {
                 int ab_x = 4 + (active_slot % 4) * 28;
                 int ab_y = 4 + (active_slot / 4) * 28;
-                oam[7].attr0 = (ab_y & 0x00FF) | 0x2000;
-                oam[7].attr1 = (ab_x & 0x01FF) | 0x8000;
-                oam[7].attr2 = 90;
+                oam[15].attr0 = (ab_y & 0x00FF) | 0x2000;
+                oam[15].attr1 = (ab_x & 0x01FF) | 0x8000;
+                oam[15].attr2 = 90;
             }
         } else if (inv_open && inv_mode == 1) {
             // Crafting Interface (Available Recipes)
-            // 1. CLEAR ALL UI OAMs (Icons 20-43, Numbers 44-91, Backgrounds 92-115)
+            // 1. CLEAR ALL UI OAMs (Numbers 32-79, Icons 80-103, Backgrounds 104-127)
             for (int i = 0; i < 24; i++) {
-                oam[i + 20].attr0 = 0x0200; oam[i + 92].attr0 = 0x0200;
-                oam[i*2 + 44].attr0 = 0x0200; oam[i*2 + 45].attr0 = 0x0200;
+                oam[i + 80].attr0 = 0x0200; oam[i + 104].attr0 = 0x0200;
+                oam[i*2 + 32].attr0 = 0x0200; oam[i*2 + 33].attr0 = 0x0200;
             }
 
             for(int r = 0; r < num_available; r++) {
@@ -1629,29 +1780,29 @@ int main(void) {
                 int r_idx = available_recipes[r];
                 
                 // Background
-                oam[r + 92].attr0 = (ry & 0x00FF) | 0x2000;
-                oam[r + 92].attr1 = (rx & 0x01FF) | 0x8000;
-                oam[r + 92].attr2 = 58;
+                oam[r + 104].attr0 = (ry & 0x00FF) | 0x2000;
+                oam[r + 104].attr1 = (rx & 0x01FF) | 0x8000;
+                oam[r + 104].attr2 = 58;
                 
                 // Result Item
                 int res_base = recipes[r_idx].sprite_base;
-                oam[r + 20].attr0 = ((ry + 8) & 0x00FF) | 0x2000;
-                oam[r + 20].attr1 = ((rx + 8) & 0x01FF) | 0x4000; 
-                oam[r + 20].attr2 = res_base;
+                oam[r + 80].attr0 = ((ry + 8) & 0x00FF) | 0x2000;
+                oam[r + 80].attr1 = ((rx + 8) & 0x01FF) | 0x4000; 
+                oam[r + 80].attr2 = res_base;
                 
                 // Show Result Count (if > 1)
                 int res_total = recipes[r_idx].res_qty;
                 if (res_total > 1) {
                     int num_y = ry + 22; int num_x = rx + 19;
-                    oam[r*2 + 44].attr0 = (num_y & 0x00FF) | 0x2000;
-                    oam[r*2 + 44].attr1 = (num_x & 0x01FF) | 0x0000;
-                    oam[r*2 + 44].attr2 = 386 + (res_total * 2);
+                    oam[r*2 + 32].attr0 = (num_y & 0x00FF) | 0x2000;
+                    oam[r*2 + 32].attr1 = (num_x & 0x01FF) | 0x0000;
+                    oam[r*2 + 32].attr2 = 386 + (res_total * 2);
                 }
 
                 if (inv_cursor == r) {
-                    oam[7].attr0 = (ry & 0x00FF) | 0x2000;
-                    oam[7].attr1 = (rx & 0x01FF) | 0x8000;
-                    oam[7].attr2 = 90;
+                    oam[15].attr0 = (ry & 0x00FF) | 0x2000;
+                    oam[15].attr1 = (rx & 0x01FF) | 0x8000;
+                    oam[15].attr2 = 90;
                 }
             }
         }
@@ -1676,14 +1827,14 @@ int main(void) {
                 // Show in front of character (offset based on direction)
                 int wx = draw_x + (facing_left ? -4 : 20);
                 int wy = draw_y + 8;
-                oam[9].attr0 = (wy & 0x00FF) | 0x2000;
-                oam[9].attr1 = (wx & 0x01FF) | 0x4000; 
-                oam[9].attr2 = item_base; 
+                oam[31].attr0 = (wy & 0x00FF) | 0x2000;
+                oam[31].attr1 = (wx & 0x01FF) | 0x4000; 
+                oam[31].attr2 = item_base; 
             } else {
-                oam[9].attr0 = 0x0200;
+                oam[31].attr0 = 0x0200;
             }
         } else {
-            oam[9].attr0 = 0x0200;
+            oam[31].attr0 = 0x0200;
         }
 
         // Set hardware scroll registers
@@ -1717,23 +1868,23 @@ int main(void) {
                 int sx = (slimes[i].x >> 8) - cam_x;
                 int sy = (slimes[i].y >> 8) - cam_y;
                 if (sx > -32 && sx < 240 && sy > -32 && sy < 160) {
-                    oam[i + 118].attr0 = (sy & 0x00FF) | 0x2000;
-                    oam[i + 118].attr1 = (sx & 0x01FF) | 0x4000; // 16x16 size
+                    oam[i + 7].attr0 = (sy & 0x00FF) | 0x2000;
+                    oam[i + 7].attr1 = (sx & 0x01FF) | 0x4000; // 16x16 size
                     int base_tile = (slimes[i].type == 1) ? 266 : 250;
-                    oam[i + 118].attr2 = (slimes[i].dy < 0) ? (base_tile + 8) : base_tile; 
-                } else oam[i + 118].attr0 = 0x0200;
-            } else oam[i + 118].attr0 = 0x0200;
+                    oam[i + 7].attr2 = (slimes[i].dy < 0) ? (base_tile + 8) : base_tile; 
+                } else oam[i + 7].attr0 = 0x0200;
+            } else oam[i + 7].attr0 = 0x0200;
         }
 
         // Draw Sun (Loosely follow player)
         if (current_bg_type == 0) {
             int sun_sx = 180 - (cam_x / 16);
             int sun_sy = -10 - (cam_y / 16);
-            oam[127].attr0 = (sun_sy & 0x00FF) | 0x2000;
-            oam[127].attr1 = (sun_sx & 0x01FF) | 0x8000;
-            oam[127].attr2 = 406 | 0x0800; // Priority 2 (behind clouds)
+            oam[18].attr0 = (sun_sy & 0x00FF) | 0x2000;
+            oam[18].attr1 = (sun_sx & 0x01FF) | 0x8000;
+            oam[18].attr2 = 406 | 0x0800; // Priority 2 (behind clouds)
         } else {
-            oam[127].attr0 = 0x0200; // Hide
+            oam[18].attr0 = 0x0200; // Hide
         }
         
         // Draw Smart Cursor
@@ -1741,14 +1892,14 @@ int main(void) {
             int cx_draw = (smart_cx * 8) - cam_x;
             int cy_draw = (smart_cy * 8) - cam_y;
             if (cx_draw > -8 && cx_draw < 240 && cy_draw > -8 && cy_draw < 160) {
-                oam[126].attr0 = (cy_draw & 0x00FF) | 0x2000;
-                oam[126].attr1 = (cx_draw & 0x01FF) | 0x0000; // 8x8 size
-                oam[126].attr2 = 438; 
+                oam[17].attr0 = (cy_draw & 0x00FF) | 0x2000;
+                oam[17].attr1 = (cx_draw & 0x01FF) | 0x0000; // 8x8 size
+                oam[17].attr2 = 438; 
             } else {
-                oam[126].attr0 = 0x0200;
+                oam[17].attr0 = 0x0200;
             }
         } else {
-            oam[126].attr0 = 0x0200;
+            oam[17].attr0 = 0x0200;
         }
 
         // 5. Depth Meter Display
@@ -1759,61 +1910,88 @@ int main(void) {
             int dig2 = abs_depth % 10;
             
             // Draw Depth Text at bottom left
-            oam[125].attr0 = (145 & 0x00FF) | 0x2000;
-            oam[125].attr1 = (10 & 0x01FF) | 0x0000; // 8x8 size
-            oam[125].attr2 = 386 + (dig1 * 2);
+            oam[19].attr0 = (145 & 0x00FF) | 0x2000;
+            oam[19].attr1 = (10 & 0x01FF) | 0x0000; // 8x8 size
+            oam[19].attr2 = 386 + (dig1 * 2);
             
-            oam[124].attr0 = (145 & 0x00FF) | 0x2000;
-            oam[124].attr1 = (18 & 0x01FF) | 0x0000;
-            oam[124].attr2 = 386 + (dig2 * 2);
+            oam[20].attr0 = (145 & 0x00FF) | 0x2000;
+            oam[20].attr1 = (18 & 0x01FF) | 0x0000;
+            oam[20].attr2 = 386 + (dig2 * 2);
         } else {
-            oam[125].attr0 = 0x0200; oam[124].attr0 = 0x0200;
+            oam[19].attr0 = 0x0200; oam[20].attr0 = 0x0200;
         }
 
-        // Update tilemap
-        update_map_seam(prev_x, prev_y, cam_x, cam_y);
-        prev_x = cam_x;
-        prev_y = cam_y;
+        // Update tilemap (Only if moved)
+        if (cam_x != prev_x || cam_y != prev_y) {
+            update_map_seam(prev_x, prev_y, cam_x, cam_y);
+            prev_x = cam_x;
+            prev_y = cam_y;
+        }
 
         // Dynamic Lighting (Punch holes in darkness using OBJ Window)
-        int light_idx = 10; // Use indices 10-19 (Unused gap between Core and UI)
+        int light_idx = 21; // Use indices 21-30 (10 sources total)
         if (current_darkness > 0) {
-            // 1. Player's held torch light
-            int p_draw_x = (ix - cam_x) + 16 - 16; // Center 32x32 on 32x32 player
-            int p_draw_y = (iy - cam_y - current_frame) + 16 - 16;
+            // 1. Player's held torch light (Centered 64x64)
+            int p_draw_x = (ix - cam_x) + 16 - 32; 
+            int p_draw_y = (iy - cam_y - current_frame) + 16 - 32;
             if (hotbar_id[active_slot] == ITEM_TORCH) {
-                oam[light_idx].attr0 = (p_draw_y & 0x00FF) | 0x2800; // OBJWIN mode + 256 color
-                oam[light_idx].attr1 = (p_draw_x & 0x01FF) | 0x8000; // 32x32 size
-                oam[light_idx].attr2 = 460;
+                oam[light_idx].attr0 = (p_draw_y & 0x00FF) | 0x2800; // OBJ Window mode
+                oam[light_idx].attr1 = (p_draw_x & 0x01FF) | 0xC000; // 64x64 size
+                oam[light_idx].attr2 = 440;
                 light_idx++;
             }
             // 2. Torches on the background (Scan nearby tiles)
-            int start_tx = cam_x / 8, start_ty = cam_y / 8;
-            for (int ty = start_ty - 2; ty < start_ty + 22; ty++) {
-                for (int tx = start_tx - 2; tx < start_tx + 32; tx++) {
-                    if (tx >= 0 && tx < WORLD_W && ty >= 0 && ty < WORLD_H) {
-                        if (world_map[ty][tx] == TILE_TORCH && light_idx < 20) {
-                            int t_draw_x = (tx * 8) - cam_x - 12; // Center 32x32 circle on 8x8 torch
-                            int t_draw_y = (ty * 8) - cam_y - 12;
-                            oam[light_idx].attr0 = (t_draw_y & 0x00FF) | 0x2800; 
-                            oam[light_idx].attr1 = (t_draw_x & 0x01FF) | 0x8000;
-                            oam[light_idx].attr2 = 460;
-                            light_idx++;
-                        }
+            int start_tx = cam_x >> 3, start_ty = cam_y >> 3;
+            for (int ty = start_ty - 3; ty < start_ty + 23; ty++) {
+                if (ty < 0 || ty >= WORLD_H) continue;
+                for (int tx = start_tx - 3; tx < start_tx + 33; tx++) {
+                    if (tx >= 0 && tx < WORLD_W && world_map[ty][tx] == TILE_TORCH) {
+                        int t_draw_x = (tx << 3) - cam_x - 28; // Center 64x64 on 8x8 torch
+                        int t_draw_y = (ty << 3) - cam_y - 28;
+                        oam[light_idx].attr0 = (t_draw_y & 0x00FF) | 0x2800; 
+                        oam[light_idx].attr1 = (t_draw_x & 0x01FF) | 0xC000;
+                        oam[light_idx].attr2 = 440;
+                        if (++light_idx >= 31) break;
                     }
                 }
+                if (light_idx >= 31) break;
             }
         }
         // Hide unused light OAMs
-        for (; light_idx < 20; light_idx++) oam[light_idx].attr0 = 0x0200;
+        for (; light_idx < 31; light_idx++) oam[light_idx].attr0 = 0x0200;
 
         // Optimized Tree Growth Tick (Target: Surface search only)
         for (int k = 0; k < 15; k++) {
             int rx = rand_next() % WORLD_W;
             int ry = rand_next() % 60; // Saplings only on surface
             if (world_map[ry][rx] == TILE_SAPLING) {
-                grow_tree(rx, ry + 1);
+                grow_tree(rx, ry + 1, 1);
             }
+        }
+
+        // Respawn Logic
+        if (p_health <= 0) {
+            p_health = 100;
+            p_x = spawn_x;
+            p_y = spawn_y;
+            p_dy = 0;
+            p_flicker = 120;
+            p_last_damage_timer = 600;
+            
+            // Instantly snap the camera to the spawn point
+            cam_x = (p_x >> 8) - 120 + 16;
+            cam_y = (p_y >> 8) - 80 + 16;
+            if (cam_x < 0) cam_x = 0;
+            if (cam_y < 0) cam_y = 0;
+            if (cam_x > (WORLD_W * 8) - 240) cam_x = (WORLD_W * 8) - 240;
+            if (cam_y > (WORLD_H * 8) - 160) cam_y = (WORLD_H * 8) - 160;
+            
+            // Force a full hardware map redraw on the next frame
+            prev_x = -999;
+            prev_y = -999;
+            
+            // Auto-save on death
+            save_game();
         }
     }
 
