@@ -10,6 +10,10 @@
 #define ITEM_SWORD    100
 #define ITEM_PICKAXE  101
 
+#define TILE_DOOR_T 29
+#define TILE_DOOR_M 30
+#define TILE_DOOR_B 31
+
 #define MAX_SLIMES 8
 typedef struct {
     int x, y, dx, dy;
@@ -53,9 +57,14 @@ const Recipe recipes[] = {
     {ITEM_FURNACE, 1, 330, {ITEM_STONE, ITEM_PLANKS, ITEM_TORCH}, {20, 4, 3}, TILE_WORKBENCH},
     {ITEM_COPPER_BAR, 1, 306, {ITEM_COPPER_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
     {ITEM_IRON_BAR, 1, 314, {ITEM_IRON_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
-    {ITEM_CHEST, 1, 338, {ITEM_PLANKS, ITEM_IRON_BAR, 0}, {8, 2, 0}, TILE_WORKBENCH}
+    {ITEM_CHEST, 1, 338, {ITEM_PLANKS, ITEM_IRON_BAR, 0}, {8, 2, 0}, TILE_WORKBENCH},
+    {ITEM_GOLD_BAR, 1, 394, {ITEM_GOLD_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
+    {ITEM_DOOR, 1, 402, {ITEM_PLANKS, 0, 0}, {6, 0, 0}, TILE_WORKBENCH},
+    {ITEM_CHAIR, 1, 418, {ITEM_PLANKS, 0, 0}, {4, 0, 0}, TILE_WORKBENCH},
+    {ITEM_ANVIL, 1, 410, {ITEM_IRON_BAR, 0, 0}, {5, 0, 0}, TILE_WORKBENCH},
+    {ITEM_TABLE, 1, 426, {ITEM_PLANKS, 0, 0}, {8, 0, 0}, TILE_WORKBENCH}
 };
-#define NUM_RECIPES 6
+#define NUM_RECIPES 11
 
 // --- Hardware Registers ---
 #define REG_DISPCNT     (*(volatile uint16_t*)0x04000000)
@@ -123,7 +132,7 @@ int p_health = 100;
 int inv_open = 0;
 static unsigned int game_time = 0;
 static int current_darkness = 0;
-unsigned char tile_solid_lut[256];
+unsigned char tile_solid_lut[512];
 
 static unsigned short blend_color(unsigned short c1, unsigned short c2, int ratio) {
     int r1 = c1 & 31, g1 = (c1 >> 5) & 31, b1 = (c1 >> 10) & 31;
@@ -247,14 +256,24 @@ void add_item(int id, int qty) {
 }
 
 
-// Restoration of draw_clouds (used at line 1556 in background logic)
+// Cloud indices in the current tileset
+#define BG_DIRT_WALL_TILE  122
+#define BG_STONE_WALL_TILE 158
+#define CLOUD0_TILE 194
+#define CLOUD1_TILE 226
+#define CLOUD2_TILE 238
+#define FONT_BASE_TILE 217
+#define SUN_TILE       227
+#define SMART_CURSOR_TILE 243
+#define MASK_BASE_TILE 244
+
 static void draw_clouds() {
-    // Cloud 0: 8x4 tiles, start index 199 at (2, 2)
-    for(int ty=0; ty<4; ty++) for(int tx=0; tx<8; tx++) bg_map[(2 + ty) * 32 + (2 + tx)] = 199 + (ty * 8) + tx;
-    // Cloud 1: 6x2 tiles, start index 231 at (15, 6)
-    for(int ty=0; ty<2; ty++) for(int tx=0; tx<6; tx++) bg_map[(6 + ty) * 32 + (15 + tx)] = 231 + (ty * 6) + tx;
-    // Cloud 2: 5x3 tiles, start index 243 at (24, 3)
-    for(int ty=0; ty<3; ty++) for(int tx=0; tx<5; tx++) bg_map[(3 + ty) * 32 + (24 + tx)] = 243 + (ty * 5) + tx;
+    // Cloud 0: 8x4 tiles
+    for(int ty=0; ty<4; ty++) for(int tx=0; tx<8; tx++) bg_map[(2 + ty) * 32 + (2 + tx)] = CLOUD0_TILE + (ty * 8) + tx;
+    // Cloud 1: 6x2 tiles
+    for(int ty=0; ty<2; ty++) for(int tx=0; tx<6; tx++) bg_map[(6 + ty) * 32 + (15 + tx)] = CLOUD1_TILE + (ty * 6) + tx;
+    // Cloud 2: 5x3 tiles
+    for(int ty=0; ty<3; ty++) for(int tx=0; tx<5; tx++) bg_map[(3 + ty) * 32 + (24 + tx)] = CLOUD2_TILE + (ty * 5) + tx;
 }
 
 
@@ -457,16 +476,20 @@ void update_map_seam(int prev_cx, int prev_cy, int cx, int cy) {
 }
 
 void update_map_seam(int prev_cx, int prev_cy, int cx, int cy); // Forward decl
+int is_tile_solid(int tile); // Forward decl
 
-void set_tile(int x, int y, unsigned char tile) {
+void set_tile(int x, int y, unsigned short tile) {
     if (x < 0 || x >= WORLD_W || y < 0 || y >= WORLD_H) return;
     world_map[y][x] = tile;
     
+    // Update collision LUT for this tile index if it's dynamic
+    int tile_idx = tile & 0x3FF;
+    if (tile_idx < 512) tile_solid_lut[tile_idx] = is_tile_solid(tile_idx);
+    
     // Sync to hardware map ONLY if on-screen to avoid corrupting circular buffer.
-    // The buffer is 32x32. We must ensure we don't overwrite tiles with different world coords.
     int tx = cam_x >> 3;
     int ty = cam_y >> 3;
-    if (x >= tx && x <= tx + 29 && y >= ty && y <= ty + 19) {
+    if (x >= tx && x <= tx + 31 && y >= ty && y <= ty + 21) {
         hw_map[(y & 31) * 32 + (x & 31)] = tile;
     }
 }
@@ -474,13 +497,15 @@ void set_tile(int x, int y, unsigned char tile) {
 int __attribute__((section(".iwram"))) is_tile_solid(int tile) {
     if (tile == TILE_AIR || tile == TILE_WOOD || tile == TILE_LEAVES || tile == TILE_TORCH) return 0;
     if (tile >= 11 && tile <= 15) return 0; // GrassPlants, (Lava Slot), Furnace, Workbench, Chest
-    if (tile >= 18 && tile <= 250) return 0; // Empty, Sapling, Trees, Walls, UI
+    if (tile >= 18 && tile <= 27) return 0; // Furnace parts, Workbench R, Chest parts, Sapling
+    if (tile >= 32 && tile <= 38) return 0; // Open Doors, Anvils, Chairs
+    if (tile >= TILE_TABLE_TL && tile <= 511) return 0; // Table, Tree tops and other non-solid tiles
     return 1;
 }
 
 int __attribute__((section(".iwram"))) is_solid(int px, int py) {
     if (px < 0 || py < 0 || px >= (WORLD_W << 3) || py >= (WORLD_H << 3)) return 1;
-    return tile_solid_lut[world_map[py >> 3][px >> 3]];
+    return tile_solid_lut[world_map[py >> 3][px >> 3] & 0x3FF];
 }
 
 int __attribute__((section(".iwram"))) check_collision(int x, int y) {
@@ -511,20 +536,22 @@ void save_game(void) {
     int addr = 4;
     
     // Compress Map (RLE)
-    uint8_t* map1d = (uint8_t*)world_map;
-    uint8_t current_tile = map1d[0];
+    uint16_t* map1d = (uint16_t*)world_map;
+    uint16_t current_tile = map1d[0];
     int run_len = 0;
     for (int i = 0; i < WORLD_W * WORLD_H; i++) {
         if (map1d[i] == current_tile && run_len < 255) {
             run_len++;
         } else {
-            sram[addr++] = current_tile;
+            sram[addr++] = current_tile & 0xFF;
+            sram[addr++] = (current_tile >> 8) & 0xFF;
             sram[addr++] = run_len;
             current_tile = map1d[i];
             run_len = 1;
         }
     }
-    sram[addr++] = current_tile;
+    sram[addr++] = current_tile & 0xFF;
+    sram[addr++] = (current_tile >> 8) & 0xFF;
     sram[addr++] = run_len;
     
     #define WRITE_INT(val) do { sram[addr++] = (val) & 0xFF; sram[addr++] = ((val) >> 8) & 0xFF; sram[addr++] = ((val) >> 16) & 0xFF; sram[addr++] = ((val) >> 24) & 0xFF; } while(0)
@@ -544,10 +571,11 @@ int load_game(void) {
     if (sram[0] != 'T' || sram[1] != 'E' || sram[2] != 'R' || sram[3] != 'R') return 0;
     int addr = 4;
     
-    uint8_t* map1d = (uint8_t*)world_map;
+    uint16_t* map1d = (uint16_t*)world_map;
     int i = 0;
     while (i < WORLD_W * WORLD_H) {
-        uint8_t tile = sram[addr++];
+        uint16_t tile = sram[addr++];
+        tile |= (sram[addr++] << 8);
         uint8_t count = sram[addr++];
         for (int c = 0; c < count && i < WORLD_W * WORLD_H; c++) {
             map1d[i++] = tile;
@@ -591,11 +619,10 @@ int main(void) {
     // Load Tiles (DMA)
     dma_copy(tileset_graphics, (void*)MEM_BG_TILES, sizeof(tileset_graphics)/2, DMA_16BIT);
     
-    // Generate a 64x64 circular light mask at tile 440 (uses 128 tile units for 256-color 1D mapping)
-    // 8x8 tiles = 64x64 pixels. Sprite units for 256c 1D mapping count 32-byte blocks.
-    // sprite_graphics is 14080 bytes = 440 blocks. So mask starts at block 440.
-    // Address offset = 440 * 32 = 14080 bytes. In uint16_t, index is 14080 / 2 = 7040.
-    volatile uint16_t* mask_dest = &MEM_OBJ_TILES[7040];
+    // Generate a 64x64 circular light mask at tile 480 (uses 128 tile units for 256-color 1D mapping)
+    // sprite_graphics is 15360 bytes = 480 blocks. So mask starts at block 480.
+    // Address offset = 488 * 32 = 15616 bytes. In uint16_t, index is 15616 / 2 = 7808.
+    volatile uint16_t* mask_dest = &MEM_OBJ_TILES[7808];
     for(int ty=0; ty<8; ty++) {
         for(int tx=0; tx<8; tx++) {
             for(int y=0; y<8; y++) {
@@ -613,9 +640,9 @@ int main(void) {
     }
     
     // Init Tile Collision LUT
-    for (int i = 0; i < 256; i++) tile_solid_lut[i] = is_tile_solid(i);
+    for (int i = 0; i < 512; i++) tile_solid_lut[i] = is_tile_solid(i);
     
-    fill_bg_map(127); // Start with BG2 (Dirt Walls)
+    for (int i = 0; i < 32 * 32; i++) bg_map[i] = 0; // Clear background to solid Sky Blue (Tile 0)
     
     // Clear map
     for (int i=0; i<32*32; i++) {
@@ -670,6 +697,7 @@ int main(void) {
                         if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_TORCH; chests[chest_count].items_count[s] = 5 + (rand_next() % 10); continue; }
                         if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_IRON_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
                         if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_COPPER_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
+                        if ((rand_next() % 100) == 0) { chests[chest_count].items_id[s] = ITEM_GOLD_BAR; chests[chest_count].items_count[s] = 1 + (rand_next() % 3); continue; }
                     }
                     chest_count++;
                 }
@@ -939,6 +967,7 @@ int main(void) {
                             else if (target == TILE_ASH) drop = ITEM_ASH;
                             else if (target == TILE_COPPER) drop = ITEM_COPPER_ORE;
                             else if (target == TILE_IRON) drop = ITEM_IRON_ORE;
+                            else if (target == TILE_GOLD) drop = ITEM_GOLD_ORE;
                             else if (target == TILE_TORCH) drop = ITEM_TORCH;
                             else if (target == TILE_MUD) drop = ITEM_MUD;
                             else if (target == TILE_JUNGLE_GRASS) drop = ITEM_JUNGLE_GRASS;
@@ -968,7 +997,7 @@ int main(void) {
                                         } else break;
                                     }
                                 } else { amt = 0; }
-                            } else if (target == TILE_LEAVES || (target >= 28 && target <= 126)) {
+                            } else if (target == TILE_LEAVES || (target >= 39 && target <= 137)) {
                                 if (cur_id == ITEM_AXE) set_tile(cx, cy, TILE_AIR);
                                 amt = 0;
                             } else if (cur_id == ITEM_PICKAXE) {
@@ -991,6 +1020,21 @@ int main(void) {
                                     if (target == TILE_CHEST_BL || target == TILE_CHEST_BR) oy--;
                                     for(int y0=oy; y0<=oy+1; y0++) for(int x0=ox; x0<=ox+1; x0++)
                                         if (IS_CHEST(world_map[y0][x0])) set_tile(x0, y0, TILE_AIR);
+                                } else if ((target & 0x3FF) >= TILE_DOOR_T && (target & 0x3FF) <= TILE_DOOR_OPEN_B) {
+                                    drop = ITEM_DOOR; amt = 1;
+                                    int y_base = cy;
+                                    int clean_target = target & 0x3FF;
+                                    if (clean_target == TILE_DOOR_B || clean_target == TILE_DOOR_OPEN_B) y_base -= 2; 
+                                    else if (clean_target == TILE_DOOR_M || clean_target == TILE_DOOR_OPEN_M) y_base -= 1;
+                                    for(int dy=0; dy<3; dy++) if (y_base+dy >= 0 && y_base+dy < WORLD_H) set_tile(cx, y_base+dy, TILE_AIR);
+                                } else if (target == TILE_ANVIL_L || target == TILE_ANVIL_R) {
+                                    drop = ITEM_ANVIL; amt = 1;
+                                    int x_base = cx; if (target == TILE_ANVIL_R) x_base--;
+                                    set_tile(x_base, cy, TILE_AIR); set_tile(x_base+1, cy, TILE_AIR);
+                                } else if (target == TILE_CHAIR_T || target == TILE_CHAIR_B) {
+                                    drop = ITEM_CHAIR; amt = 1;
+                                    int y_base = cy; if (target == TILE_CHAIR_B) y_base--;
+                                    set_tile(cx, y_base, TILE_AIR); set_tile(cx, y_base+1, TILE_AIR);
                                 } else {
                                     set_tile(cx, cy, TILE_AIR);
                                 }
@@ -1036,7 +1080,7 @@ int main(void) {
                                 }
                             }
                         }
-                    } else if (cur_id != ITEM_PICKAXE && cur_id != ITEM_AXE && cur_id != ITEM_ACORN && cur_count > 0 && swing_timer == 0 && cur_id != ITEM_GEL && cur_id != ITEM_COPPER_ORE && cur_id != ITEM_IRON_ORE && cur_id != ITEM_COPPER_BAR && cur_id != ITEM_IRON_BAR && cur_id != ITEM_SWORD) {
+                    } else if (cur_id != ITEM_PICKAXE && cur_id != ITEM_AXE && cur_id != ITEM_ACORN && cur_count > 0 && swing_timer == 0 && cur_id != ITEM_GEL && cur_id != ITEM_COPPER_BAR && cur_id != ITEM_IRON_BAR && cur_id != ITEM_GOLD_BAR && cur_id != ITEM_SWORD) {
                         if (!is_solid(cx * 8, cy * 8)) {
                             int tile_to_place = 0;
                             if (cur_id == ITEM_DIRT) tile_to_place = TILE_DIRT;
@@ -1046,32 +1090,46 @@ int main(void) {
                             else if (cur_id == ITEM_MUD) tile_to_place = TILE_MUD;
                             else if (cur_id == ITEM_JUNGLE_GRASS) tile_to_place = TILE_JUNGLE_GRASS;
                             else if (cur_id == ITEM_TORCH) tile_to_place = TILE_TORCH;
-                            else if (cur_id == ITEM_WORKBENCH) {
-                                // 2x1
+                            else if (cur_id == ITEM_COPPER_ORE) tile_to_place = TILE_COPPER;
+                            else if (cur_id == ITEM_IRON_ORE) tile_to_place = TILE_IRON;
+                            else if (cur_id == ITEM_GOLD_ORE) tile_to_place = TILE_GOLD;
+                            int placed = 0;
+                            if (cur_id == ITEM_WORKBENCH) {
                                 if (cx < WORLD_W - 1 && !is_tile_solid(world_map[cy][cx+1])) {
-                                    set_tile(cx, cy, TILE_WORKBENCH);
-                                    set_tile(cx+1, cy, TILE_WORKBENCH_R);
-                                } else tile_to_place = 0;
+                                    set_tile(cx, cy, TILE_WORKBENCH); set_tile(cx+1, cy, TILE_WORKBENCH_R); placed = 1;
+                                }
                             } else if (cur_id == ITEM_FURNACE) {
-                                // 3x2
                                 if (cx < WORLD_W - 2 && cy < WORLD_H - 1 && 
                                     !is_tile_solid(world_map[cy][cx+1]) && !is_tile_solid(world_map[cy][cx+2]) &&
                                     !is_tile_solid(world_map[cy+1][cx]) && !is_tile_solid(world_map[cy+1][cx+1]) && !is_tile_solid(world_map[cy+1][cx+2])) {
                                     set_tile(cx, cy, TILE_FURNACE); set_tile(cx+1, cy, TILE_FURNACE_TM); set_tile(cx+2, cy, TILE_FURNACE_TR);
-                                    set_tile(cx, cy+1, TILE_FURNACE_BL); set_tile(cx+1, cy+1, TILE_FURNACE_BM); set_tile(cx+2, cy+1, TILE_FURNACE_BR);
-                                } else tile_to_place = 0;
+                                    set_tile(cx, cy+1, TILE_FURNACE_BL); set_tile(cx+1, cy+1, TILE_FURNACE_BM); set_tile(cx+2, cy+1, TILE_FURNACE_BR); placed = 1;
+                                }
                             } else if (cur_id == ITEM_CHEST) {
-                                // 2x2
                                 if (cx < WORLD_W - 1 && cy < WORLD_H - 1 && 
                                     !is_tile_solid(world_map[cy][cx+1]) && !is_tile_solid(world_map[cy+1][cx]) && !is_tile_solid(world_map[cy+1][cx+1])) {
                                     set_tile(cx, cy, TILE_CHEST); set_tile(cx+1, cy, TILE_CHEST_TR);
                                     set_tile(cx, cy+1, TILE_CHEST_BL); set_tile(cx+1, cy+1, TILE_CHEST_BR);
-                                    add_chest(cx, cy);
-                                } else tile_to_place = 0;
-                            }
-                            if (tile_to_place > 0) set_tile(cx, cy, tile_to_place);
+                                    add_chest(cx, cy); placed = 1;
+                                }
+                            } else if (cur_id == ITEM_ANVIL) {
+                                if (cx < WORLD_W - 1 && !is_tile_solid(world_map[cy][cx+1])) {
+                                    set_tile(cx, cy, TILE_ANVIL_L); set_tile(cx+1, cy, TILE_ANVIL_R); placed = 1;
+                                }
+                            } else if (cur_id == ITEM_CHAIR) {
+                                if (cy > 0 && !is_tile_solid(world_map[cy-1][cx])) {
+                                    set_tile(cx, cy, TILE_CHAIR_B); set_tile(cx, cy-1, TILE_CHAIR_T); placed = 1;
+                                }
+                            } else if (cur_id == ITEM_DOOR) {
+                                if (cy > 1 && cy < WORLD_H - 1 && 
+                                    !is_tile_solid(world_map[cy-1][cx]) && !is_tile_solid(world_map[cy-2][cx]) &&
+                                    is_tile_solid(world_map[cy+1][cx]) && is_tile_solid(world_map[cy-3][cx])) {
+                                    set_tile(cx, cy, TILE_DOOR_B); set_tile(cx, cy-1, TILE_DOOR_M); set_tile(cx, cy-2, TILE_DOOR_T); placed = 1;
+                                }
+                            } 
+                            if (tile_to_place > 0) { set_tile(cx, cy, tile_to_place); placed = 1; }
                             
-                            if (tile_to_place > 0 || cur_id == ITEM_WORKBENCH || cur_id == ITEM_FURNACE || cur_id == ITEM_CHEST) {
+                            if (placed) {
                                 hotbar_count[active_slot]--;
                                 if (hotbar_count[active_slot] <= 0) {
                                     hotbar_count[active_slot] = 0;
@@ -1086,10 +1144,92 @@ int main(void) {
             
         } else {
             // Move Player
+            int ix = p_x >> 8;
+            int iy = p_y >> 8;
+            int px_tile = ix / 8;
+            int py_tile = iy / 8;
             cursor_dx = 0;
             cursor_dy = 0;
             if (KEY_DOWN(KEY_RIGHT)) { p_dx = 384; facing_left = 0; }
             if (KEY_DOWN(KEY_LEFT))  { p_dx = -384; facing_left = 1; }
+            
+            // Smart Door Opening (Walk into door to open)
+            if (p_dx != 0) {
+                // Check in front of the hitbox edges (10 left, 21 right) - increased lookahead to 4px
+                int tx = (p_dx < 0) ? (ix + 10 - 4) / 8 : (ix + 21 + 4) / 8;
+                // Check vertical range from head (7) to feet (29)
+                int ty_top = (iy + 4) / 8; // Slightly more generous top check
+                int ty_bot = (iy + 30) / 8; // slightly more generous bottom check
+                
+                if (tx >= 0 && tx < WORLD_W) {
+                    for (int rty = ty_top; rty <= ty_bot; rty++) {
+                        if (rty >= 0 && rty < WORLD_H) {
+                            int t = world_map[rty][tx] & 0x3FF;
+                            if (t >= TILE_DOOR_T && t <= TILE_DOOR_B) { 
+                                int y_base = rty;
+                                if (t == TILE_DOOR_B) y_base -= 2;
+                                else if (t == TILE_DOOR_M) y_base -= 1;
+                                
+                                int slab_x = (p_dx > 0) ? tx + 1 : tx - 1;
+                                int flip_flag = (p_dx < 0) ? 0x0400 : 0;
+                                // Open door: Hinge at tx, Slab at slab_x
+                                set_tile(tx, y_base, TILE_DOOR_OPEN_T | flip_flag);
+                                set_tile(tx, y_base+1, TILE_DOOR_OPEN_M | flip_flag);
+                                set_tile(tx, y_base+2, TILE_DOOR_OPEN_B | flip_flag);
+                                if (slab_x >= 0 && slab_x < WORLD_W) {
+                                    set_tile(slab_x, y_base, TILE_DOOR_SLAB_T | flip_flag);
+                                    set_tile(slab_x, y_base+1, TILE_DOOR_SLAB_M | flip_flag);
+                                    set_tile(slab_x, y_base+2, TILE_DOOR_SLAB_B | flip_flag);
+                                }
+                                audio_play_sfx(sfx_dig0, sfx_dig0_len);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Smart Door Closing (Auto-Close when away)
+            int p_left_t  = (ix + 10) / 8;
+            int p_right_t = (ix + 21) / 8;
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dx = -4; dx <= 4; dx++) {
+                    int ctx = px_tile + dx;
+                    int cty = py_tile + dy;
+                    if (ctx >= 0 && ctx < WORLD_W && cty >= 0 && cty < WORLD_H) {
+                        int t = world_map[cty][ctx] & 0x3FF;
+                        if (t == TILE_DOOR_OPEN_T || t == TILE_DOOR_OPEN_M || t == TILE_DOOR_OPEN_B) {
+                            // Close if player is not in the column AND not in adjacent columns
+                            if (ctx < p_left_t - 1 || ctx > p_right_t + 1) {
+                                int y_base = cty;
+                                if (t == TILE_DOOR_OPEN_B || t == TILE_DOOR_SLAB_B) y_base -= 2;
+                                else if (t == TILE_DOOR_OPEN_M || t == TILE_DOOR_SLAB_M) y_base -= 1;
+                                
+                                // To close properly, we need to find which column is the hinge.
+                                // Simplification: Doors always open 2-wide. If we find an OPEN part, 
+                                // check neighbors to find the hinge or slab.
+                                // For now, just clear the column and its immediate neighbors if they are Slab.
+                                set_tile(ctx, y_base, TILE_DOOR_T);
+                                set_tile(ctx, y_base+1, TILE_DOOR_M);
+                                set_tile(ctx, y_base+2, TILE_DOOR_B);
+                                
+                                // Scan left and right for slabs to remove
+                                for (int sx = ctx - 1; sx <= ctx + 1; sx += 2) {
+                                    if (sx >= 0 && sx < WORLD_W) {
+                                        int st = world_map[y_base][sx] & 0x3FF;
+                                        if (st == TILE_DOOR_SLAB_T) {
+                                            set_tile(sx, y_base, TILE_AIR);
+                                            set_tile(sx, y_base+1, TILE_AIR);
+                                            set_tile(sx, y_base+2, TILE_AIR);
+                                        }
+                                    }
+                                }
+                                audio_play_sfx(sfx_dig0, sfx_dig0_len); // Reuse dig sound for now
+                            }
+                        }
+                    }
+                }
+            }
             
             if (grounded) {
                 can_double_jump = 1;
@@ -1209,14 +1349,23 @@ int main(void) {
                     for (int dist = 1; dist <= 3; dist++) {
                         int tx = px_tile + (dir * dist);
                         if (tx < 0 || tx >= WORLD_W) continue;
-                        if (smart_cx == -1 && py_tile >= 0 && py_tile < WORLD_H && world_map[py_tile][tx] != TILE_AIR && world_map[py_tile][tx] != TILE_GRASS_PLANTS && world_map[py_tile][tx] != TILE_LEAVES && world_map[py_tile][tx] != TILE_WOOD && (world_map[py_tile][tx] < 16 || world_map[py_tile][tx] > 114)) {
-                            smart_cx = tx; smart_cy = py_tile; break;
+                        if (smart_cx == -1 && py_tile >= 0 && py_tile < WORLD_H) {
+                            int t = world_map[py_tile][tx];
+                            if (t != TILE_AIR && t != TILE_WOOD && t != TILE_LEAVES && (is_tile_solid(t) || (t >= 11 && t <= 38))) {
+                                smart_cx = tx; smart_cy = py_tile; break;
+                            }
                         }
-                        if (smart_cx == -1 && py_tile - 1 >= 0 && world_map[py_tile - 1][tx] != TILE_AIR && world_map[py_tile - 1][tx] != TILE_GRASS_PLANTS && world_map[py_tile - 1][tx] != TILE_LEAVES && world_map[py_tile - 1][tx] != TILE_WOOD && (world_map[py_tile - 1][tx] < 16 || world_map[py_tile - 1][tx] > 114)) {
-                            smart_cx = tx; smart_cy = py_tile - 1; break;
+                        if (smart_cx == -1 && py_tile - 1 >= 0) {
+                            int t = world_map[py_tile-1][tx];
+                            if (t != TILE_AIR && t != TILE_WOOD && t != TILE_LEAVES && (is_tile_solid(t) || (t >= 11 && t <= 38))) {
+                                smart_cx = tx; smart_cy = py_tile - 1; break;
+                            }
                         }
-                        if (smart_cx == -1 && py_tile + 1 < WORLD_H && world_map[py_tile + 1][tx] != TILE_AIR && world_map[py_tile + 1][tx] != TILE_GRASS_PLANTS && world_map[py_tile + 1][tx] != TILE_LEAVES && world_map[py_tile + 1][tx] != TILE_WOOD && (world_map[py_tile + 1][tx] < 16 || world_map[py_tile + 1][tx] > 114)) {
-                            smart_cx = tx; smart_cy = py_tile + 1; break;
+                        if (smart_cx == -1 && py_tile + 1 < WORLD_H) {
+                            int t = world_map[py_tile+1][tx];
+                            if (t != TILE_AIR && t != TILE_WOOD && t != TILE_LEAVES && (is_tile_solid(t) || (t >= 11 && t <= 38))) {
+                                smart_cx = tx; smart_cy = py_tile + 1; break;
+                            }
                         }
                     }
                 }
@@ -1242,6 +1391,7 @@ int main(void) {
         #define IS_FURNACE(t) (t == TILE_FURNACE || (t >= TILE_FURNACE_TM && t <= TILE_FURNACE_BR))
         #define IS_WORKBENCH(t) (t == TILE_WORKBENCH || t == TILE_WORKBENCH_R)
         #define IS_CHEST(t) (t == TILE_CHEST || (t >= TILE_CHEST_TR && t <= TILE_CHEST_BR))
+        #define IS_TABLE(t) (t >= TILE_TABLE_TL && t <= TILE_TABLE_BR)
 
         if (swing_timer == 14 && smart_cx != -1 && smart_cy != -1) {
             int rnd = seed % 3;
@@ -1262,6 +1412,7 @@ int main(void) {
             else if (target == TILE_ASH) { drop = ITEM_ASH; amt = 1; }
             else if (target == TILE_COPPER) { drop = ITEM_COPPER_ORE; amt = 1; }
             else if (target == TILE_IRON) { drop = ITEM_IRON_ORE; amt = 1; }
+            else if (target == TILE_GOLD) { drop = ITEM_GOLD_ORE; amt = 1; }
             else if (target == TILE_TORCH) { drop = ITEM_TORCH; amt = 1; }
             else if (target == TILE_MUD) { drop = ITEM_MUD; amt = 1; }
             else if (target == TILE_JUNGLE_GRASS) { drop = ITEM_JUNGLE_GRASS; amt = 1; }
@@ -1285,24 +1436,47 @@ int main(void) {
                 if (target == TILE_CHEST_BL || target == TILE_CHEST_BR) oy--;
                 for(int y=oy; y<=oy+1; y++) for(int x=ox; x<=ox+1; x++)
                     if (IS_CHEST(world_map[y][x])) CLEAR_TILE(x, y);
+            } else if ((target & 0x3FF) >= TILE_DOOR_T && (target & 0x3FF) <= TILE_DOOR_OPEN_B) {
+                drop = ITEM_DOOR; amt = 1;
+                int y_base = smart_cy;
+                int clean_target = target & 0x3FF;
+                if (clean_target == TILE_DOOR_B || clean_target == TILE_DOOR_OPEN_B) y_base -= 2; 
+                else if (clean_target == TILE_DOOR_M || clean_target == TILE_DOOR_OPEN_M) y_base -= 1;
+                for(int dy=0; dy<3; dy++) if (y_base+dy >=0 && y_base+dy < WORLD_H) CLEAR_TILE(smart_cx, y_base+dy);
+            } else if (target == TILE_ANVIL_L || target == TILE_ANVIL_R) {
+                drop = ITEM_ANVIL; amt = 1;
+                int x_base = smart_cx; if (target == TILE_ANVIL_R) x_base--;
+                CLEAR_TILE(x_base, smart_cy); CLEAR_TILE(x_base+1, smart_cy);
+            } else if (target == TILE_CHAIR_T || target == TILE_CHAIR_B) {
+                drop = ITEM_CHAIR; amt = 1;
+                int y_base = smart_cy; if (target == TILE_CHAIR_B) y_base--;
+                CLEAR_TILE(smart_cx, y_base); CLEAR_TILE(smart_cx, y_base+1);
+            } else if (IS_TABLE(target)) {
+                drop = ITEM_TABLE; amt = 1;
+                int ox = smart_cx, oy = smart_cy;
+                if (target == TILE_TABLE_TM || target == TILE_TABLE_BM) ox--;
+                else if (target == TILE_TABLE_TR || target == TILE_TABLE_BR) ox -= 2;
+                if (target >= TILE_TABLE_BL && target <= TILE_TABLE_BR) oy--;
+                for(int y=oy; y<=oy+1; y++) for(int x=ox; x<=ox+2; x++)
+                    if (IS_TABLE(world_map[y][x])) CLEAR_TILE(x, y);
             } else if (target == TILE_WOOD) {
                 if (cur_tool == ITEM_AXE) {
                     drop = ITEM_PLANKS; amt = 0; acorns = (seed % 3);
                     int ty = smart_cy;
                     while (ty >= 0) {
                         int t_center = world_map[ty][smart_cx];
-                        if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= 28 && t_center <= 126)) {
+                        if (t_center == TILE_WOOD || t_center == TILE_LEAVES || (t_center >= TILE_FOLIAGE_START && t_center <= TILE_FOLIAGE_END)) {
                             CLEAR_TILE(smart_cx, ty);
                             for (int lx = smart_cx - 2; lx <= smart_cx + 2; lx++)
                                 if (lx >= 0 && lx < WORLD_W) {
                                     int t = world_map[ty][lx];
-                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= 28 && t <= 126)) CLEAR_TILE(lx, ty);
+                                    if (t == TILE_WOOD || t == TILE_LEAVES || (t >= TILE_FOLIAGE_START && t <= TILE_FOLIAGE_END)) CLEAR_TILE(lx, ty);
                                 }
                             amt++; ty--;
                         } else break;
                     }
                 }
-            } else if (target != TILE_SAPLING && target != TILE_AIR && target != TILE_GRASS_PLANTS && target != TILE_LEAVES && (target < 28 || target > 126)) {
+            } else if (target != TILE_SAPLING && target != TILE_AIR && target != TILE_GRASS_PLANTS && target != TILE_LEAVES && target <= TILE_TABLE_BR) {
                 if (cur_tool == ITEM_PICKAXE) { drop = target; amt = 1; }
             }
 
@@ -1599,7 +1773,7 @@ int main(void) {
                                             break; 
                                         } 
                                     }
-                                    else if(hotbar_count[s] == 0 && hotbar_id[s] != ITEM_SWORD && hotbar_id[s] != ITEM_PICKAXE) {
+                                    else if(hotbar_count[s] == 0 && hotbar_id[s] != ITEM_SWORD && hotbar_id[s] != ITEM_PICKAXE && hotbar_id[s] != ITEM_AXE) {
                                         hotbar_id[s] = ITEM_GEL; hotbar_count[s] = 1; 
                                         audio_play_sfx(sfx_grab, sfx_grab_len);
                                         break;
@@ -1710,6 +1884,12 @@ int main(void) {
                     else if (id == ITEM_IRON_ORE) item_base = 298;
                     else if (id == ITEM_COPPER_BAR) item_base = 306;
                     else if (id == ITEM_IRON_BAR) item_base = 314;
+                    else if (id == ITEM_GOLD_ORE) item_base = 386;
+                    else if (id == ITEM_GOLD_BAR) item_base = 394;
+                    else if (id == ITEM_DOOR) item_base = 402;
+                    else if (id == ITEM_ANVIL) item_base = 410;
+                    else if (id == ITEM_CHAIR) item_base = 418;
+                    else if (id == ITEM_TABLE) item_base = 434;
                     else if (id == ITEM_WORKBENCH) item_base = 322;
                     else if (id == ITEM_FURNACE) item_base = 330;
                     else if (id == ITEM_CHEST) item_base = 338;
@@ -1733,11 +1913,11 @@ int main(void) {
                     if (tens > 0) {
                         oam[i*2 + 32].attr0 = (num_y & 0x00FF) | 0x2000;
                         oam[i*2 + 32].attr1 = ((num_x - 4) & 0x01FF) | 0x0000;
-                        oam[i*2 + 32].attr2 = 386 + (tens * 2);
+                        oam[i*2 + 32].attr2 = (FONT_BASE_TILE * 2) + (tens * 2);
                     } else oam[i*2 + 32].attr0 = 0x0200;
                     oam[i*2 + 33].attr0 = (num_y & 0x00FF) | 0x2000;
                     oam[i*2 + 33].attr1 = (num_x & 0x01FF) | 0x0000;
-                    oam[i*2 + 33].attr2 = 386 + (ones * 2);
+                    oam[i*2 + 33].attr2 = (FONT_BASE_TILE * 2) + (ones * 2);
                 } else { oam[i*2 + 32].attr0 = 0x0200; oam[i*2 + 33].attr0 = 0x0200; }
             }
             
@@ -1796,7 +1976,7 @@ int main(void) {
                     int num_y = ry + 22; int num_x = rx + 19;
                     oam[r*2 + 32].attr0 = (num_y & 0x00FF) | 0x2000;
                     oam[r*2 + 32].attr1 = (num_x & 0x01FF) | 0x0000;
-                    oam[r*2 + 32].attr2 = 386 + (res_total * 2);
+                    oam[r*2 + 32].attr2 = (FONT_BASE_TILE * 2) + (res_total * 2);
                 }
 
                 if (inv_cursor == r) {
@@ -1851,9 +2031,9 @@ int main(void) {
                 for (int i = 0; i < 32 * 32; i++) bg_map[i] = 0;
                 draw_clouds();
             } else if (current_bg_type == 1) {
-                fill_bg_map(127); 
-            } else if (current_bg_type == 2) {
-                fill_bg_map(163); 
+                fill_bg_map(BG_DIRT_WALL_TILE); 
+            } else {
+                fill_bg_map(BG_STONE_WALL_TILE); 
             }
             last_bg_type = current_bg_type;
         }
@@ -1882,7 +2062,7 @@ int main(void) {
             int sun_sy = -10 - (cam_y / 16);
             oam[18].attr0 = (sun_sy & 0x00FF) | 0x2000;
             oam[18].attr1 = (sun_sx & 0x01FF) | 0x8000;
-            oam[18].attr2 = 406 | 0x0800; // Priority 2 (behind clouds)
+            oam[18].attr2 = (SUN_TILE * 2) | 0x0800; // Priority 2 (behind clouds)
         } else {
             oam[18].attr0 = 0x0200; // Hide
         }
@@ -1894,7 +2074,7 @@ int main(void) {
             if (cx_draw > -8 && cx_draw < 240 && cy_draw > -8 && cy_draw < 160) {
                 oam[17].attr0 = (cy_draw & 0x00FF) | 0x2000;
                 oam[17].attr1 = (cx_draw & 0x01FF) | 0x0000; // 8x8 size
-                oam[17].attr2 = 438; 
+                oam[17].attr2 = (SMART_CURSOR_TILE * 2); 
             } else {
                 oam[17].attr0 = 0x0200;
             }
@@ -1912,11 +2092,11 @@ int main(void) {
             // Draw Depth Text at bottom left
             oam[19].attr0 = (145 & 0x00FF) | 0x2000;
             oam[19].attr1 = (10 & 0x01FF) | 0x0000; // 8x8 size
-            oam[19].attr2 = 386 + (dig1 * 2);
+            oam[19].attr2 = (FONT_BASE_TILE * 2) + (dig1 * 2);
             
             oam[20].attr0 = (145 & 0x00FF) | 0x2000;
             oam[20].attr1 = (18 & 0x01FF) | 0x0000;
-            oam[20].attr2 = 386 + (dig2 * 2);
+            oam[20].attr2 = (FONT_BASE_TILE * 2) + (dig2 * 2);
         } else {
             oam[19].attr0 = 0x0200; oam[20].attr0 = 0x0200;
         }
@@ -1937,7 +2117,7 @@ int main(void) {
             if (hotbar_id[active_slot] == ITEM_TORCH) {
                 oam[light_idx].attr0 = (p_draw_y & 0x00FF) | 0x2800; // OBJ Window mode
                 oam[light_idx].attr1 = (p_draw_x & 0x01FF) | 0xC000; // 64x64 size
-                oam[light_idx].attr2 = 440;
+                oam[light_idx].attr2 = (MASK_BASE_TILE * 2);
                 light_idx++;
             }
             // 2. Torches on the background (Scan nearby tiles)
@@ -1950,7 +2130,7 @@ int main(void) {
                         int t_draw_y = (ty << 3) - cam_y - 28;
                         oam[light_idx].attr0 = (t_draw_y & 0x00FF) | 0x2800; 
                         oam[light_idx].attr1 = (t_draw_x & 0x01FF) | 0xC000;
-                        oam[light_idx].attr2 = 440;
+                        oam[light_idx].attr2 = (MASK_BASE_TILE * 2);
                         if (++light_idx >= 31) break;
                     }
                 }

@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include "world_gen.h"
 
-unsigned char __attribute__((section(".ewram"))) world_map[WORLD_H][WORLD_W];
+unsigned short __attribute__((section(".ewram"))) world_map[WORLD_H][WORLD_W];
 // unsigned char __attribute__((section(".ewram"))) light_map[WORLD_H][WORLD_W]; // Unused
 
 // int jungle_x = 0; // Unused
@@ -222,7 +222,7 @@ void grow_tree(int x, int y, int sync) {
         if ((rand_next() % 100) < 25) { // 25% chance of branch at this height
             int side = (rand_next() % 100) < 50 ? -1 : 1; 
             int style = rand_next() % 3;
-            int branch_base = 103 + (style * 8) + (side == 1 ? 4 : 0);
+            int branch_base = (TILE_FOLIAGE_START + 50) + (style * 8) + (side == 1 ? 4 : 0);
             
             int start_bx = (side == -1) ? (x - 2) : (x + 1);
             int start_by = y - 1 - ty - 1; 
@@ -242,8 +242,8 @@ void grow_tree(int x, int y, int sync) {
     }
     
     // Leaves (5x5 Canopy)
-    int tree_type = rand_next() % 3;
-    int base_tile = 28 + (tree_type * 25);
+    int tree_type = rand_next() % 2;
+    int base_tile = TILE_FOLIAGE_START + (tree_type * 25);
     int trunk_top_y = y - height;
     int start_x = x - 2;
     int start_y = trunk_top_y - 3; 
@@ -334,16 +334,19 @@ static void generate_ores() {
                 if (y <= 70) {
                     if (p < 5) spawn_ore_vein(x, y, TILE_COPPER, 4 + (rand_next() % 6));
                     else if (p < 8) spawn_ore_vein(x, y, TILE_IRON, 3 + (rand_next() % 5));
+                    else if (p < 10) spawn_ore_vein(x, y, TILE_GOLD, 3 + (rand_next() % 4));
                 } 
                 // Cavern Ores (71-110)
                 else if (y <= 110) {
                     if (p < 6) spawn_ore_vein(x, y, TILE_IRON, 5 + (rand_next() % 8));
+                    else if (p < 10) spawn_ore_vein(x, y, TILE_GOLD, 4 + (rand_next() % 6));
                     // Add more rare ores here if desired
                 }
                 // Underworld Ores (111-127)
                 else {
                     // Placeholder for Hellstone (maybe reusing Copper or Iron ID for now)
                     if (p < 10) spawn_ore_vein(x, y, TILE_IRON, 6 + (rand_next() % 10));
+                    else if (p < 15) spawn_ore_vein(x, y, TILE_GOLD, 5 + (rand_next() % 8));
                 }
             }
         }

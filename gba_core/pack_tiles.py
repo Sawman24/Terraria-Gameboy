@@ -39,6 +39,26 @@ TILE_DEFS = [
     ("ChestBL", r"Tiles\\Tiles_21.png", 0, 9),     # 25
     ("ChestBR", r"Tiles\\Tiles_21.png", 9, 9),     # 26
     ("Sapling", r"Tiles\\Tiles_20.png", 0, 0),     # 27
+    ("Gold", r"Tiles\Gold.png", 0, 0),             # 28
+    ("DoorT", r"Tiles\Tiles_10.png", 0, 0),     # 29
+    ("DoorM", r"Tiles\Tiles_10.png", 0, 9),     # 30
+    ("DoorB", r"Tiles\Tiles_10.png", 0, 18),    # 31
+    ("DoorOpenT", r"Tiles\Tiles_11.png", 0, 0), # 32
+    ("DoorOpenM", r"Tiles\Tiles_11.png", 0, 9), # 33
+    ("DoorOpenB", r"Tiles\Tiles_11.png", 0, 18),# 34
+    ("DoorSlabT", r"Tiles\Tiles_11.png", 9, 0), # 35
+    ("DoorSlabM", r"Tiles\Tiles_11.png", 9, 9), # 36
+    ("DoorSlabB", r"Tiles\Tiles_11.png", 9, 18),# 37
+    ("AnvilL", r"Tiles\Tiles_16.png", 0, 0),    # 38
+    ("AnvilR", r"Tiles\Tiles_16.png", 9, 0),    # 39
+    ("ChairT", r"Tiles\Tiles_15.png", 0, 0),    # 40
+    ("ChairB", r"Tiles\Tiles_15.png", 0, 9),    # 41
+    ("TableTL", r"Tiles\Tiles_14.png", 0, 0),   # 42
+    ("TableTM", r"Tiles\Tiles_14.png", 9, 0),   # 43
+    ("TableTR", r"Tiles\Tiles_14.png", 18, 0),  # 44
+    ("TableBL", r"Tiles\Tiles_14.png", 0, 9),   # 45
+    ("TableBM", r"Tiles\Tiles_14.png", 9, 9),   # 46
+    ("TableBR", r"Tiles\Tiles_14.png", 18, 9),  # 47
 ]
 
 IN_DIR = "GBA_Assets"
@@ -104,7 +124,7 @@ tree_tops_path = os.path.join(IN_DIR, r"Misc\Tree_Tops.png")
 if os.path.exists(tree_tops_path):
     tt_img = Image.open(tree_tops_path).convert("RGBA")
     # Tree Tops are at offsets: 0, 41, 82. We'll extract 40x40 (5x5 tiles)
-    offsets = [0, 41, 82]
+    offsets = [0, 41] # Only use the first two styles to save 25 tiles
     for start_x in offsets:
         for ty in range(5):
             for tx in range(5):

@@ -269,6 +269,12 @@ extra_items = [
      "GBA_Assets/Items/Item_53.png", # Cloud in a Bottle
      "GBA_Assets/Items/Item_18.png", # Depth Meter
      "GBA_Assets/Items/Item_128.png", # Rocket Boots
+     "GBA_Assets/Items/Item_13.png", # Gold Ore
+     "GBA_Assets/Items/Item_19.png", # Gold Bar
+     "GBA_Assets/Items/Item_25.png", # Door
+     "GBA_Assets/Items/Item_35.png", # Anvil
+     "GBA_Assets/Items/Item_34.png", # Chair
+     "GBA_Assets/Items/Item_32.png", # Table
 ]
 
 for p in extra_items:

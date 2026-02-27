@@ -33,12 +33,36 @@
 #define TILE_CHEST_BL 25
 #define TILE_CHEST_BR 26
 #define TILE_SAPLING 27
+#define TILE_GOLD 28
+#define TILE_DOOR_OPEN_T 32
+#define TILE_DOOR_OPEN_M 33
+#define TILE_DOOR_OPEN_B 34
+#define TILE_DOOR_SLAB_T 35
+#define TILE_DOOR_SLAB_M 36
+#define TILE_DOOR_SLAB_B 37
+#define TILE_ANVIL_L 38
+#define TILE_ANVIL_R 39
+#define TILE_CHAIR_T 40
+#define TILE_CHAIR_B 41
+#define TILE_TABLE_TL 42
+#define TILE_TABLE_TM 43
+#define TILE_TABLE_TR 44
+#define TILE_TABLE_BL 45
+#define TILE_TABLE_BM 46
+#define TILE_TABLE_BR 47
+#define TILE_FOLIAGE_START 48
+#define TILE_FOLIAGE_END   121
 #define ITEM_GEL    102
 #define ITEM_TORCH  103
 #define ITEM_COPPER_ORE 104
 #define ITEM_IRON_ORE 105
 #define ITEM_COPPER_BAR 106
 #define ITEM_IRON_BAR 107
+#define ITEM_GOLD_ORE 125
+#define ITEM_GOLD_BAR 126
+#define ITEM_DOOR 127
+#define ITEM_ANVIL 128
+#define ITEM_CHAIR 129
 #define ITEM_WORKBENCH 108
 #define ITEM_FURNACE 109
 #define ITEM_CHEST 110
@@ -56,9 +80,10 @@
 #define ITEM_CLOUD_BOTTLE 122
 #define ITEM_DEPTH_METER 123
 #define ITEM_ROCKET_BOOTS 124
+#define ITEM_TABLE 130
 
 // The world map array, sits in EWRAM (256KB)
-extern unsigned char world_map[WORLD_H][WORLD_W];
+extern unsigned short world_map[WORLD_H][WORLD_W];
 // extern unsigned char light_map[WORLD_H][WORLD_W]; (Unused)
 
 // Random seed
@@ -68,6 +93,6 @@ unsigned int rand_next();
 // Functions
 void generate_world(void);
 void grow_tree(int x, int y, int sync);
-void set_tile(int x, int y, unsigned char tile);
+void set_tile(int x, int y, unsigned short tile);
 
 #endif
