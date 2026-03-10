@@ -243,6 +243,19 @@ if os.path.exists(npc16_path):
         frame_small = frame.resize((16, 16), resample=Image.NEAREST)
         slice_to_tiles(frame_small, 2, 2)
 
+# --- 7c. Extract Zombie NPC (NPC_3) ---
+npc3_path = "GBA_Assets/NPCs/NPC_3.png"
+if os.path.exists(npc3_path):
+    zombie_raw = Image.open(npc3_path).convert("RGBA")
+    # 17x71 total. 3 frames of ~17x23.
+    # We will use 16x32 per frame (8 tiles per frame)
+    for f in range(3):
+        frame = zombie_raw.crop((0, f*23, 16, (f+1)*23))
+        padded = Image.new("RGBA", (16, 32), (0,0,0,0))
+        # Align to bottom of 32px height
+        padded.alpha_composite(frame, (0, 32-23)) 
+        slice_to_tiles(padded, 2, 4)
+
 # --- 8. Extract Gel Item ---
 gel_path = "GBA_Assets/Items/Item_23.png"
 if os.path.exists(gel_path):

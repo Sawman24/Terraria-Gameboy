@@ -14,7 +14,7 @@
 #define TILE_DOOR_M 30
 #define TILE_DOOR_B 31
 
-#define MAX_SLIMES 8
+#define MAX_SLIMES 4
 typedef struct {
     int x, y, dx, dy;
     int hp;
@@ -26,6 +26,21 @@ typedef struct {
     int stuck_x;
     int stuck_y;
 } Slime;
+
+#define MAX_ZOMBIES 4
+typedef struct {
+    int x, y, dx, dy;
+    int hp;
+    int active;
+    int facing_left;
+    int anim_timer;
+    int anim_frame;
+    int flicker;
+    int stuck_timer;
+    int stuck_x;
+    int stuck_y;
+    int path_fail_timer;
+} Zombie;
 
 #define MAX_CHESTS 32
 typedef struct {
@@ -53,16 +68,16 @@ typedef struct {
 
 const Recipe recipes[] = {
     {ITEM_TORCH, 3, 170, {ITEM_GEL, ITEM_PLANKS, 0}, {1, 1, 0}, 0},
-    {ITEM_WORKBENCH, 1, 322, {ITEM_PLANKS, 0, 0}, {10, 0, 0}, 0},
-    {ITEM_FURNACE, 1, 330, {ITEM_STONE, ITEM_PLANKS, ITEM_TORCH}, {20, 4, 3}, TILE_WORKBENCH},
-    {ITEM_COPPER_BAR, 1, 306, {ITEM_COPPER_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
-    {ITEM_IRON_BAR, 1, 314, {ITEM_IRON_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
-    {ITEM_CHEST, 1, 338, {ITEM_PLANKS, ITEM_IRON_BAR, 0}, {8, 2, 0}, TILE_WORKBENCH},
-    {ITEM_GOLD_BAR, 1, 394, {ITEM_GOLD_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
-    {ITEM_DOOR, 1, 402, {ITEM_PLANKS, 0, 0}, {6, 0, 0}, TILE_WORKBENCH},
-    {ITEM_CHAIR, 1, 418, {ITEM_PLANKS, 0, 0}, {4, 0, 0}, TILE_WORKBENCH},
-    {ITEM_ANVIL, 1, 410, {ITEM_IRON_BAR, 0, 0}, {5, 0, 0}, TILE_WORKBENCH},
-    {ITEM_TABLE, 1, 426, {ITEM_PLANKS, 0, 0}, {8, 0, 0}, TILE_WORKBENCH}
+    {ITEM_WORKBENCH, 1, 370, {ITEM_PLANKS, 0, 0}, {10, 0, 0}, 0},
+    {ITEM_FURNACE, 1, 378, {ITEM_STONE, ITEM_PLANKS, ITEM_TORCH}, {20, 4, 3}, TILE_WORKBENCH},
+    {ITEM_COPPER_BAR, 1, 354, {ITEM_COPPER_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
+    {ITEM_IRON_BAR, 1, 362, {ITEM_IRON_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
+    {ITEM_CHEST, 1, 386, {ITEM_PLANKS, ITEM_IRON_BAR, 0}, {8, 2, 0}, TILE_WORKBENCH},
+    {ITEM_GOLD_BAR, 1, 442, {ITEM_GOLD_ORE, 0, 0}, {3, 0, 0}, TILE_FURNACE},
+    {ITEM_DOOR, 1, 450, {ITEM_PLANKS, 0, 0}, {6, 0, 0}, TILE_WORKBENCH},
+    {ITEM_CHAIR, 1, 466, {ITEM_PLANKS, 0, 0}, {4, 0, 0}, TILE_WORKBENCH},
+    {ITEM_ANVIL, 1, 458, {ITEM_IRON_BAR, 0, 0}, {5, 0, 0}, TILE_WORKBENCH},
+    {ITEM_TABLE, 1, 474, {ITEM_PLANKS, 0, 0}, {8, 0, 0}, TILE_WORKBENCH}
 };
 #define NUM_RECIPES 11
 
@@ -262,10 +277,10 @@ void add_item(int id, int qty) {
 #define CLOUD0_TILE 194
 #define CLOUD1_TILE 226
 #define CLOUD2_TILE 238
-#define FONT_BASE_TILE 217
-#define SUN_TILE       227
-#define SMART_CURSOR_TILE 243
-#define MASK_BASE_TILE 244
+#define FONT_BASE_TILE 241
+#define SUN_TILE       251
+#define SMART_CURSOR_TILE 267
+#define MASK_BASE_TILE 268
 
 static void draw_clouds() {
     // Cloud 0: 8x4 tiles
@@ -749,6 +764,8 @@ int main(void) {
     
     Slime slimes[MAX_SLIMES];
     for(int i=0; i<MAX_SLIMES; i++) slimes[i].active = 0;
+    Zombie zombies[MAX_ZOMBIES];
+    for(int i=0; i<MAX_ZOMBIES; i++) zombies[i].active = 0;
     
     // Slimes initialized above.
     // Chests initialized in is_continue block.
@@ -1633,6 +1650,46 @@ int main(void) {
                 }
             }
 
+            // Zombie Spawning (Night only)
+            if (current_darkness >= 10 && (rand_next() % 3500) == 0) {
+                for (int i = 0; i < MAX_ZOMBIES; i++) {
+                    if (!zombies[i].active) {
+                        int rx_off = (rand_next() % 240) - 120;
+                        if (rx_off > -50 && rx_off < 50) rx_off = 100;
+                        int rx = (p_x >> 8) + rx_off;
+                        if (rx < 0) rx = 0; if (rx >= WORLD_W*8) rx = WORLD_W*8-1;
+                        
+                        int tx = rx / 8;
+                        int py_tile = (p_y >> 11);
+                        int start_ty = py_tile - 10;
+                        if (start_ty < 1) start_ty = 1;
+                        
+                        int found_y = -1;
+                        for (int ty = start_ty; ty < WORLD_H; ty++) {
+                            if (world_map[ty][tx] != TILE_AIR && world_map[ty-1][tx] == TILE_AIR) {
+                                found_y = (ty * 8) - 32; // Zombie is 32px tall
+                                break;
+                            }
+                        }
+
+                        if (found_y != -1) {
+                            zombies[i].x = rx << 8;
+                            zombies[i].y = found_y << 8;
+                            zombies[i].dx = 0; zombies[i].dy = 0;
+                            zombies[i].hp = 45; 
+                            zombies[i].active = 1;
+                            zombies[i].anim_timer = 0; zombies[i].anim_frame = 0;
+                            zombies[i].flicker = 0;
+                            zombies[i].stuck_timer = 0;
+                            zombies[i].stuck_x = zombies[i].x >> 8;
+                            zombies[i].stuck_y = zombies[i].y >> 8;
+                            zombies[i].path_fail_timer = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+
             for (int i = 0; i < MAX_SLIMES; i++) {
                 if (!slimes[i].active) continue;
                 
@@ -1785,6 +1842,118 @@ int main(void) {
                 }
             }
         }
+
+        // 6. Update Zombies
+        for (int i = 0; i < MAX_ZOMBIES; i++) {
+            if (!zombies[i].active) continue;
+            
+            int p_sx = p_x >> 8;
+            int p_sy = p_y >> 8;
+            int sx = zombies[i].x >> 8;
+            int sy = zombies[i].y >> 8;
+            
+            // Despawning (Same as slimes)
+            int dist_x = sx - p_sx;
+            int dist_y = sy - p_sy;
+            if (abs(dist_x) > 320 || abs(dist_y) > 200) {
+                zombies[i].active = 0;
+                continue;
+            }
+            
+            zombies[i].dy += 24;
+            if (zombies[i].dy > 1024) zombies[i].dy = 1024;
+            
+            // Gravity & Collision Y
+            int next_sy = (zombies[i].y + zombies[i].dy) >> 8;
+            if (zombies[i].dy > 0 && is_solid(sx + 8, next_sy + 28)) { // 28 is approx feet for 32px tall(?)
+                zombies[i].dy = 0;
+                zombies[i].y &= ~0xFF;
+            } else if (zombies[i].dy < 0 && is_solid(sx + 8, next_sy)) {
+                zombies[i].dy = 0; // Bonk
+            } else {
+                zombies[i].y += zombies[i].dy;
+            }
+            sy = zombies[i].y >> 8;
+
+            // Pathfinding AI
+            int move_dir = (p_sx > sx) ? 1 : -1;
+            if (zombies[i].path_fail_timer > 60) {
+                move_dir = -move_dir; // "Walk off" behavior
+                if (zombies[i].path_fail_timer > 180) zombies[i].path_fail_timer = 0;
+            }
+            zombies[i].dx = move_dir * 128; // Half speed of player
+            zombies[i].facing_left = (move_dir > 0);
+
+            // Horizontal Collision
+            int side_x = (zombies[i].dx > 0) ? (sx + 15) : (sx);
+            if (is_solid(side_x, sy + 8) || is_solid(side_x, sy + 24)) {
+                // Wall! Try to jump
+                if (is_solid(sx + 8, sy + 32)) { // On ground
+                    zombies[i].dy = -600;
+                }
+                zombies[i].dx = 0;
+                zombies[i].path_fail_timer++;
+            } else {
+                zombies[i].x += zombies[i].dx;
+                // If moving away from player because of "walk off", count up
+                if ((p_sx > sx && move_dir < 0) || (p_sx < sx && move_dir > 0)) {
+                    zombies[i].path_fail_timer++;
+                }
+            }
+
+            // Stuck detection
+            if (abs(sx - zombies[i].stuck_x) < 2 && abs(sy - zombies[i].stuck_y) < 2) {
+                zombies[i].stuck_timer++;
+                if (zombies[i].stuck_timer > 120) zombies[i].path_fail_timer = 70; // Force walk off
+            } else {
+                zombies[i].stuck_timer = 0;
+                zombies[i].stuck_x = sx; zombies[i].stuck_y = sy;
+            }
+
+            // Animation
+            if (zombies[i].dx != 0) {
+                zombies[i].anim_timer++;
+                if (zombies[i].anim_timer > 10) {
+                    zombies[i].anim_timer = 0;
+                    zombies[i].anim_frame = (zombies[i].anim_frame + 1) % 3;
+                }
+            } else {
+                zombies[i].anim_frame = 0;
+            }
+
+            if (zombies[i].flicker > 0) zombies[i].flicker--;
+
+            // Player damage from Zombie
+            if (p_flicker == 0 && !inv_open) {
+                int p_left = p_sx + 10;
+                int p_right = p_sx + 21;
+                int p_top = p_sy + 7;
+                int p_bottom = p_sy + 29;
+                if (p_right > sx && p_left < sx + 16 && p_bottom > sy && p_top < sy + 32) {
+                    int damage = 14 - 3; // 14 base, offset by defense
+                    if (damage < 1) damage = 1;
+                    p_health -= damage;
+                    if (p_health < 0) p_health = 0;
+                    audio_play_sfx(sfx_hurt, sfx_hurt_len);
+                    p_last_damage_timer = 0;
+                    p_flicker = 60;
+                    p_dy = -400; p_dx = (p_sx > sx) ? 400 : -400;
+                }
+            }
+
+            // Zombie damage from player
+            if (swing_timer > 0 && hotbar_id[active_slot] == ITEM_SWORD && zombies[i].flicker == 0) {
+                int sw_left = facing_left ? (p_sx - 16) : (p_sx + 16);
+                int sw_right = facing_left ? (p_sx + 16) : (p_sx + 48);
+                if (sw_right > sx && sw_left < sx + 16 && p_sy + 32 > sy && p_sy < sy + 32) {
+                    zombies[i].hp -= 10;
+                    zombies[i].flicker = 10;
+                    audio_play_sfx(sfx_hit, sfx_hit_len);
+                    zombies[i].dy = -300; zombies[i].dx = (p_sx > sx) ? -512 : 512;
+                    if (zombies[i].hp <= 0) zombies[i].active = 0;
+                }
+            }
+        }
         
         if (p_flicker > 0) p_flicker--;
 
@@ -1879,25 +2048,25 @@ int main(void) {
                     else if (id == TILE_JUNGLE_GRASS || id == ITEM_JUNGLE_GRASS) item_base = 226;
                     else if (id == ITEM_ACORN) item_base = 234;
                     else if (id == ITEM_ASH) item_base = 242;
-                    else if (id == ITEM_GEL) item_base = 282;
-                    else if (id == ITEM_COPPER_ORE) item_base = 290;
-                    else if (id == ITEM_IRON_ORE) item_base = 298;
-                    else if (id == ITEM_COPPER_BAR) item_base = 306;
-                    else if (id == ITEM_IRON_BAR) item_base = 314;
-                    else if (id == ITEM_GOLD_ORE) item_base = 386;
-                    else if (id == ITEM_GOLD_BAR) item_base = 394;
-                    else if (id == ITEM_DOOR) item_base = 402;
-                    else if (id == ITEM_ANVIL) item_base = 410;
-                    else if (id == ITEM_CHAIR) item_base = 418;
-                    else if (id == ITEM_TABLE) item_base = 434;
-                    else if (id == ITEM_WORKBENCH) item_base = 322;
-                    else if (id == ITEM_FURNACE) item_base = 330;
-                    else if (id == ITEM_CHEST) item_base = 338;
-                    else if (id == ITEM_REGEN_BAND) item_base = 346;
-                    else if (id == ITEM_MAGIC_MIRROR) item_base = 354;
-                    else if (id == ITEM_CLOUD_BOTTLE) item_base = 362;
-                    else if (id == ITEM_DEPTH_METER) item_base = 370;
-                    else if (id == ITEM_ROCKET_BOOTS) item_base = 378;
+                    else if (id == ITEM_GEL) item_base = 330;
+                    else if (id == ITEM_COPPER_ORE) item_base = 338;
+                    else if (id == ITEM_IRON_ORE) item_base = 346;
+                    else if (id == ITEM_COPPER_BAR) item_base = 354;
+                    else if (id == ITEM_IRON_BAR) item_base = 362;
+                    else if (id == ITEM_GOLD_ORE) item_base = 434;
+                    else if (id == ITEM_GOLD_BAR) item_base = 442;
+                    else if (id == ITEM_DOOR) item_base = 450;
+                    else if (id == ITEM_ANVIL) item_base = 458;
+                    else if (id == ITEM_CHAIR) item_base = 466;
+                    else if (id == ITEM_TABLE) item_base = 474;
+                    else if (id == ITEM_WORKBENCH) item_base = 370;
+                    else if (id == ITEM_FURNACE) item_base = 378;
+                    else if (id == ITEM_CHEST) item_base = 386;
+                    else if (id == ITEM_REGEN_BAND) item_base = 394;
+                    else if (id == ITEM_MAGIC_MIRROR) item_base = 402;
+                    else if (id == ITEM_CLOUD_BOTTLE) item_base = 410;
+                    else if (id == ITEM_DEPTH_METER) item_base = 418;
+                    else if (id == ITEM_ROCKET_BOOTS) item_base = 426;
                 }
                 
                 if (item_base > 0) {
@@ -2054,6 +2223,19 @@ int main(void) {
                     oam[i + 7].attr2 = (slimes[i].dy < 0) ? (base_tile + 8) : base_tile; 
                 } else oam[i + 7].attr0 = 0x0200;
             } else oam[i + 7].attr0 = 0x0200;
+        }
+
+        // Draw Zombies
+        for(int i=0; i<MAX_ZOMBIES; i++) {
+            if (zombies[i].active && (zombies[i].flicker % 2 == 0)) {
+                int sx = (zombies[i].x >> 8) - cam_x;
+                int sy = (zombies[i].y >> 8) - cam_y;
+                if (sx > -16 && sx < 240 && sy > -32 && sy < 160) {
+                    oam[i + 11].attr0 = (sy & 0x00FF) | 0x2000 | 0x8000; // 256c, Tall
+                    oam[i + 11].attr1 = (sx & 0x01FF) | 0x8000 | (zombies[i].facing_left ? 0x1000 : 0); // 16x32, Flip, Size 2
+                    oam[i + 11].attr2 = 282 + (zombies[i].anim_frame * 16); 
+                } else oam[i + 11].attr0 = 0x0200;
+            } else oam[i + 11].attr0 = 0x0200;
         }
 
         // Draw Sun (Loosely follow player)
